@@ -1,0 +1,38 @@
+menu:
+  file: "ファイル"
+  settings: "設定"
+  about: "アプリについて"
+  exit: "終了"
+  preferences: "環境設定..."
+  about_app: "EventDock について..."
+settings:
+  search_options: "検索..."
+  no_matching_options: "一致する項目がありません"
+  load_error: "保存された設定を読み込めませんでした。"
+  save_error: "設定を保存できませんでした。"
+  import_error: "設定をインポートできませんでした。"
+  export_error: "設定をエクスポートできませんでした。"
+  title: "設定"
+  language: "言語"
+  theme: "外観"
+  theme_system: "システム設定に従う"
+  theme_light: "ライト"
+  theme_dark: "ダーク"
+  configuration: "設定ファイル"
+  import: "インポート..."
+  export: "エクスポート..."
+  reset: "初期設定に戻す"
+  error: "設定エラー"
+about:
+  title: "%{name} について"
+  description: "構造化されたイベントやログを収集・閲覧するためのオープンソースのデスクトップアプリケーションです。Rust と egui で開発されています。"
+  components: "コンポーネントのバージョン"
+  repository: "GitHub リポジトリ"
+  license: "MIT ライセンス"
+dialog:
+  details: "エラーの詳細"
+  error: "エラー"
+  close: "閉じる"
+
+language:
+  name: "日本語"

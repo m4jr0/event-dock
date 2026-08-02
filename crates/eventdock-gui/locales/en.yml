@@ -1,0 +1,38 @@
+menu:
+  file: "File"
+  settings: "Settings"
+  about: "About"
+  exit: "Exit"
+  preferences: "Preferences..."
+  about_app: "About EventDock..."
+settings:
+  search_options: "Search options..."
+  no_matching_options: "No matching options"
+  load_error: "Unable to load saved settings."
+  save_error: "Unable to save settings."
+  import_error: "Unable to import settings."
+  export_error: "Unable to export settings."
+  title: "Settings"
+  language: "Language"
+  theme: "Appearance"
+  theme_system: "System"
+  theme_light: "Light"
+  theme_dark: "Dark"
+  configuration: "Configuration"
+  import: "Import..."
+  export: "Export..."
+  reset: "Restore defaults"
+  error: "Settings error"
+about:
+  title: "About %{name}"
+  description: "An open-source desktop application for collecting and exploring structured events and logs. Built with Rust and egui."
+  components: "Component versions"
+  repository: "GitHub repository"
+  license: "MIT License"
+dialog:
+  details: "Error details"
+  error: "Error"
+  close: "Close"
+
+language:
+  name: "English"

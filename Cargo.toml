@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/eventdock",
+    "crates/eventdock-cli", "crates/eventdock-gui", "crates/eventdock-backend",
+]

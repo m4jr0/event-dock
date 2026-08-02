@@ -1,0 +1,11 @@
+[package]
+name = "eventdock-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.5", features = ["derive"] }
+eventdock = { version = "0.1.0", path = "../eventdock" }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+eventdock-backend = { version = "0.1.0", path = "../eventdock-backend" }

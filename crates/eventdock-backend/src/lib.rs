@@ -1,0 +1,23 @@
+mod backend;
+mod config;
+mod query;
+pub mod query_protocol;
+mod shared_snapshot;
+mod snapshot;
+mod storage;
+mod transport;
+
+pub use backend::{Backend, PendingQuery};
+pub use config::BackendConfig;
+pub use snapshot::{BackendSnapshot, NetworkSnapshot};
+
+pub use query::{
+    EventQuery, EventQueryResult, QueriedEvent, QueryExecution, execute_query,
+};
+
+pub use query_protocol::{
+    QueryRequest, QueryResponse, query_remote, serve_queries,
+};
+
+/// Version of this library package.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

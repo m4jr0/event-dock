@@ -1,0 +1,38 @@
+menu:
+  file: "Fichier"
+  settings: "Paramètres"
+  about: "À propos"
+  exit: "Quitter"
+  preferences: "Préférences..."
+  about_app: "À propos d’EventDock..."
+settings:
+  search_options: "Rechercher..."
+  no_matching_options: "Aucun résultat"
+  load_error: "Impossible de charger les paramètres enregistrés."
+  save_error: "Impossible d’enregistrer les paramètres."
+  import_error: "Impossible d’importer les paramètres."
+  export_error: "Impossible d’exporter les paramètres."
+  title: "Paramètres"
+  language: "Langue"
+  theme: "Apparence"
+  theme_system: "Système"
+  theme_light: "Clair"
+  theme_dark: "Sombre"
+  configuration: "Configuration"
+  import: "Importer..."
+  export: "Exporter..."
+  reset: "Rétablir les paramètres par défaut"
+  error: "Erreur de paramètres"
+about:
+  title: "À propos de %{name}"
+  description: "Une application de bureau open source pour collecter et explorer des événements structurés et des journaux. Développée en Rust avec egui."
+  components: "Versions des composants"
+  repository: "Dépôt GitHub"
+  license: "Licence MIT"
+dialog:
+  details: "Détails de l’erreur"
+  error: "Erreur"
+  close: "Fermer"
+
+language:
+  name: "Français"
