@@ -33,7 +33,8 @@ impl Fields {
         name: impl Into<String>,
         value: impl Into<FieldValue>,
     ) -> Option<FieldValue> {
-        self.entries.insert(name.into(), value.into())
+        self.entries
+            .insert(name.into(), value.into())
     }
 
     pub fn get(
@@ -213,8 +214,9 @@ mod tests {
 
     #[test]
     fn collect_fields() {
-        let fields: Fields =
-            [("name", "foo"), ("key", "bar")].into_iter().collect();
+        let fields: Fields = [("name", "foo"), ("key", "bar")]
+            .into_iter()
+            .collect();
 
         assert_eq!(fields.len(), 2);
         assert_eq!(

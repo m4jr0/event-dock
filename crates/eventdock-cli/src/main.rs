@@ -146,12 +146,15 @@ async fn handle_client(
                 continue;
             }
         };
-        event_sender.send(event).await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "the EventDock ingestion task stopped",
-            )
-        })?;
+        event_sender
+            .send(event)
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the EventDock ingestion task stopped",
+                )
+            })?;
     }
     println!("📴 Client disconnected: {peer_address}");
     Ok(())

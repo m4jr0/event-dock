@@ -1,3 +1,8 @@
+pub mod compact;
+pub use compact::{
+    CompactDecodingError, CompactEncodingError, CompactEventStore,
+    CompactEventView, CompactStoreError, FieldIter, FieldValueView, FieldView,
+};
 mod console_sink;
 mod error;
 mod event;

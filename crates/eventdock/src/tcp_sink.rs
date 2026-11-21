@@ -243,7 +243,8 @@ mod tests {
 
         let mut sink = TcpSink::connect(address).unwrap();
         let event = make_event("foo");
-        sink.submit(EventRef::from(&event)).unwrap();
+        sink.submit(EventRef::from(&event))
+            .unwrap();
 
         let lines = receiver.join().unwrap().unwrap();
         assert_eq!(lines.len(), 1);
@@ -261,7 +262,8 @@ mod tests {
 
         for message in ["foo", "bar", "baz"] {
             let event = make_event(message);
-            sink.submit(EventRef::from(&event)).unwrap();
+            sink.submit(EventRef::from(&event))
+                .unwrap();
         }
 
         let lines = receiver.join().unwrap().unwrap();
@@ -280,13 +282,15 @@ mod tests {
         let mut sink = TcpSink::connect(address).unwrap();
 
         let long_event = make_event(&"x".repeat(1024));
-        sink.submit(EventRef::from(&long_event)).unwrap();
+        sink.submit(EventRef::from(&long_event))
+            .unwrap();
 
         let capacity = sink.staging.capacity();
         assert!(capacity > 0);
 
         let short_event = make_event("bar");
-        sink.submit(EventRef::from(&short_event)).unwrap();
+        sink.submit(EventRef::from(&short_event))
+            .unwrap();
 
         assert_eq!(sink.staging.capacity(), capacity);
         assert_eq!(receiver.join().unwrap().unwrap().len(), 2);
@@ -368,8 +372,10 @@ mod tests {
         let mut sink = TcpSink::connect(address).unwrap();
         let first = make_event("foo");
         let second = make_event("bar");
-        sink.serialize(EventRef::from(&first)).unwrap();
-        sink.serialize(EventRef::from(&second)).unwrap();
+        sink.serialize(EventRef::from(&first))
+            .unwrap();
+        sink.serialize(EventRef::from(&second))
+            .unwrap();
 
         let serialized = std::str::from_utf8(&sink.staging).unwrap();
 

@@ -45,7 +45,8 @@ impl IncomingEvent {
         name: impl Into<String>,
         value: impl Into<FieldValue>,
     ) -> Option<FieldValue> {
-        self.fields.insert(name.into(), value.into())
+        self.fields
+            .insert(name.into(), value.into())
     }
 }
 

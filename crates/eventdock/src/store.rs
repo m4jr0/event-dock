@@ -28,7 +28,9 @@ impl EventStore {
     fn allocate_id(&mut self) -> EventId {
         let id = self.next_id;
 
-        self.next_id = id.checked_add(1).expect("Event ID counter overflowed");
+        self.next_id = id
+            .checked_add(1)
+            .expect("Event ID counter overflowed");
 
         id
     }
@@ -140,7 +142,10 @@ mod tests {
         assert_eq!(store.len(), 3);
         assert!(store.get(0).is_none());
 
-        let ids: Vec<_> = store.iter().map(|stored| stored.id).collect();
+        let ids: Vec<_> = store
+            .iter()
+            .map(|stored| stored.id)
+            .collect();
         assert_eq!(ids, [1, 2, 3]);
     }
 
@@ -167,7 +172,11 @@ mod tests {
         store.push(make_event("bar"));
         store.push(make_event("baz"));
 
-        let ids: Vec<_> = store.iter().rev().map(|stored| stored.id).collect();
+        let ids: Vec<_> = store
+            .iter()
+            .rev()
+            .map(|stored| stored.id)
+            .collect();
 
         assert_eq!(ids, [2, 1, 0]);
     }

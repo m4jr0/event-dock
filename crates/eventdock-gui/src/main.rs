@@ -85,8 +85,14 @@ impl EventDockApp {
             return true;
         }
         let search = self.search_text.to_lowercase();
-        event.message.to_lowercase().contains(&search)
-            || event.source.to_lowercase().contains(&search)
+        event
+            .message
+            .to_lowercase()
+            .contains(&search)
+            || event
+                .source
+                .to_lowercase()
+                .contains(&search)
     }
 
     fn visible_event_count(&self) -> usize {
@@ -234,7 +240,9 @@ fn format_timestamp(timestamp: Timestamp) -> String {
     let seconds = nanos.div_euclid(1_000_000_000);
     let subsec_nanos = nanos.rem_euclid(1_000_000_000) as u32;
     match DateTime::<Utc>::from_timestamp(seconds, subsec_nanos) {
-        Some(datetime) => datetime.format("%H:%M:%S%.9f").to_string(),
+        Some(datetime) => datetime
+            .format("%H:%M:%S%.9f")
+            .to_string(),
         None => format!("{nanos} ns"),
     }
 }
@@ -271,12 +279,14 @@ fn run_listener(
     sender: &Sender<CollectorMessage>,
 ) -> AppResult<()> {
     let listener = TcpListener::bind(address)?;
-    sender.send(CollectorMessage::Listening).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "GUI stopped receiving collector messages",
-        )
-    })?;
+    sender
+        .send(CollectorMessage::Listening)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "GUI stopped receiving collector messages",
+            )
+        })?;
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
@@ -320,12 +330,14 @@ fn handle_client(
             continue;
         }
         let event: IncomingEvent = serde_json::from_str(&line)?;
-        sender.send(CollectorMessage::Event(event)).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "GUI stopped receiving events",
-            )
-        })?;
+        sender
+            .send(CollectorMessage::Event(event))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "GUI stopped receiving events",
+                )
+            })?;
     }
     Ok(())
 }
