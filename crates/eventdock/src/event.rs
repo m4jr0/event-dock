@@ -95,6 +95,18 @@ impl<'a> From<&'a IncomingEvent> for EventRef<'a> {
     }
 }
 
+impl From<EventRef<'_>> for IncomingEvent {
+    fn from(event: EventRef<'_>) -> Self {
+        Self {
+            timestamp: event.timestamp,
+            source: event.source.to_owned(),
+            level: event.level,
+            message: event.message.to_owned(),
+            fields: event.fields.clone(),
+        }
+    }
+}
+
 /// Event after EventDock has accepted and identified it.
 #[derive(Debug, Clone)]
 pub struct StoredEvent {

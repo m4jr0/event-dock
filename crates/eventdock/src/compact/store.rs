@@ -1,6 +1,6 @@
 use super::{
     CompactDecodingError, CompactEncodingError, EventMetadata, FieldIter,
-    PayloadView, decode_payload, encode_payload,
+    PayloadView, decode_trusted_payload, encode_payload,
 };
 use crate::{EventId, EventRef, LogLevel, Timestamp};
 
@@ -141,7 +141,7 @@ impl CompactEventStore {
             .payloads
             .get(metadata.payload_offset..end)
             .ok_or(CompactDecodingError::UnexpectedEnd)?;
-        let payload = decode_payload(bytes)?;
+        let payload = decode_trusted_payload(bytes)?;
         Ok(CompactEventView { metadata, payload })
     }
 
@@ -320,14 +320,36 @@ mod tests {
     fn view_rejects_truncated_payload() {
         let mut store = CompactEventStore::new();
         let input = event("data");
+
         store
             .push(EventRef::from(&input))
             .unwrap();
         store.payloads.pop();
+
         assert_eq!(
             store.view(&store.metadata[0]).err(),
             Some(CompactDecodingError::UnexpectedEnd)
         );
+    }
+
+    #[test]
+    fn view_defers_truncated_field_validation() {
+        let mut store = CompactEventStore::new();
+        let input = event("data");
+
+        store
+            .push(EventRef::from(&input))
+            .unwrap();
+
+        store.payloads.pop();
+        store.metadata[0].payload_len -= 1;
+
+        let view = store.view(&store.metadata[0]).unwrap();
+
+        assert_eq!(view.message(), "data");
+        assert!(view.fields().any(|field| {
+            matches!(field, Err(CompactDecodingError::UnexpectedEnd))
+        }));
     }
 
     #[test]

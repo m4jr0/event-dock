@@ -37,9 +37,10 @@ impl EventStore {
 
     pub fn push(
         &mut self,
-        event: IncomingEvent,
+        event: impl Into<IncomingEvent>,
     ) -> EventId {
         let id = self.allocate_id();
+        let event = event.into();
 
         if self.events.len() == self.capacity {
             self.events.pop_front();
@@ -93,6 +94,20 @@ mod tests {
 
     fn make_event(message: &str) -> IncomingEvent {
         IncomingEvent::new("foo", LogLevel::Info, message)
+    }
+
+    #[test]
+    fn accepts_borrowed_event_and_owns_its_data() {
+        let mut store = EventStore::new(2);
+        {
+            let event = IncomingEvent::new("source", LogLevel::Info, "message")
+                .with_field("count", 42);
+            store.push(crate::EventRef::from(&event));
+        }
+        let stored = store.get(0).unwrap();
+        assert_eq!(stored.event.source, "source");
+        assert_eq!(stored.event.message, "message");
+        assert_eq!(stored.event.fields.len(), 1);
     }
 
     #[test]

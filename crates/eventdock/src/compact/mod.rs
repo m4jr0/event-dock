@@ -226,29 +226,35 @@ fn read_field<'a>(
     Ok(FieldView { name, value })
 }
 
-fn decode_payload(
+// Used only for payloads created by encode_payload and retained privately by the store.
+// The header remains bounds-checked and UTF-8-checked. Fields are decoded lazily.
+fn decode_trusted_payload(
     mut input: &[u8]
 ) -> Result<PayloadView<'_>, CompactDecodingError> {
     let source = read_string(&mut input)?;
     let message = read_string(&mut input)?;
     let field_count = read_u32(&mut input)?;
-    let fields = input;
-
-    // Validate the complete payload before exposing borrowed field views.
-    for _ in 0..field_count {
-        read_field(&mut input)?;
-    }
-
-    if !input.is_empty() {
-        return Err(CompactDecodingError::TrailingData);
-    }
-
     Ok(PayloadView {
         source,
         message,
-        fields,
+        fields: input,
         field_count,
     })
+}
+
+#[cfg(test)]
+fn decode_payload(
+    input: &[u8]
+) -> Result<PayloadView<'_>, CompactDecodingError> {
+    let view = decode_trusted_payload(input)?;
+    let mut remaining = view.fields;
+    for _ in 0..view.field_count {
+        read_field(&mut remaining)?;
+    }
+    if !remaining.is_empty() {
+        return Err(CompactDecodingError::TrailingData);
+    }
+    Ok(view)
 }
 
 #[cfg(test)]
@@ -347,6 +353,24 @@ mod tests {
         assert_eq!(
             decode_payload(&buffer),
             Err(CompactDecodingError::UnexpectedEnd)
+        );
+    }
+
+    #[test]
+    fn trusted_header_defers_field_validation() {
+        let mut buffer = Vec::new();
+        encode_payload(&mut buffer, "source", "message", &sample_fields())
+            .unwrap();
+        buffer.pop();
+        let view = decode_trusted_payload(&buffer).unwrap();
+        assert_eq!(view.message, "message");
+        assert_eq!(
+            decode_payload(&buffer),
+            Err(CompactDecodingError::UnexpectedEnd)
+        );
+        assert!(
+            view.fields()
+                .any(|field| field.is_err())
         );
     }
 
