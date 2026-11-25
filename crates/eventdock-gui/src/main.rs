@@ -3,6 +3,7 @@ mod app;
 mod config;
 mod i18n;
 mod settings;
+mod tab;
 mod ui;
 
 rust_i18n::i18n!("locales", fallback = "en");

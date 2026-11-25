@@ -2,9 +2,11 @@ pub use storage::compact::{
     CompactDecodingError, CompactEncodingError, CompactEventStore,
     CompactEventView, CompactStoreError, FieldIter, FieldValueView, FieldView,
 };
+
 mod error;
 mod event;
 mod field;
+pub mod identity;
 mod level;
 mod logger;
 mod sinks;
