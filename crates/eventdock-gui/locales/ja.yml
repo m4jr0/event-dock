@@ -5,7 +5,16 @@ menu:
   exit: "終了"
   preferences: "環境設定..."
   about_app: "EventDock について..."
+tab:
+  new: "新しいタブ"
+  close: "タブを閉じる"
+  error: "タブエラー"
+  id_exhausted: "タブ識別子の割り当て上限に達しました"
+workspace:
+  empty: "開いているタブはありません"
+  open_hint: "%{shortcut} を押して新しいタブを開く"
 settings:
+  unsupported_version: "サポートされていない設定バージョン"
   search_options: "検索..."
   no_matching_options: "一致する項目がありません"
   load_error: "保存された設定を読み込めませんでした。"

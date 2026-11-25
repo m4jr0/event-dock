@@ -3,3 +3,4 @@ pub(crate) mod tab_bar;
 pub(crate) mod theme;
 pub(crate) mod widgets;
 pub(crate) mod windows;
+pub(crate) mod workspace;

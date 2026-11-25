@@ -5,7 +5,16 @@ menu:
   exit: "Quitter"
   preferences: "Préférences..."
   about_app: "À propos d’EventDock..."
+tab:
+  new: "Nouvel onglet"
+  close: "Fermer l’onglet"
+  error: "Erreur d’onglet"
+  id_exhausted: "Espace d’identifiants d’onglets épuisé"
+workspace:
+  empty: "Aucun onglet ouvert"
+  open_hint: "Appuyez sur %{shortcut} pour ouvrir un nouvel onglet"
 settings:
+  unsupported_version: "Version des paramètres non prise en charge"
   search_options: "Rechercher..."
   no_matching_options: "Aucun résultat"
   load_error: "Impossible de charger les paramètres enregistrés."

@@ -26,7 +26,7 @@ pub(crate) fn decode(text: &str) -> Result<Settings, String> {
         .and_then(serde_json::Value::as_u64)
         != Some(u64::from(VERSION))
     {
-        return Err("Unsupported settings version".to_owned());
+        return Err(rust_i18n::t!("settings.unsupported_version").to_string());
     }
 
     let document: Document =

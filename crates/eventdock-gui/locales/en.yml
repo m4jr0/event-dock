@@ -5,7 +5,16 @@ menu:
   exit: "Exit"
   preferences: "Preferences..."
   about_app: "About EventDock..."
+tab:
+  new: "New tab"
+  close: "Close tab"
+  error: "Tab error"
+  id_exhausted: "Tab identifier space exhausted"
+workspace:
+  empty: "No tabs open"
+  open_hint: "Press %{shortcut} to open a new tab"
 settings:
+  unsupported_version: "Unsupported settings version"
   search_options: "Search options..."
   no_matching_options: "No matching options"
   load_error: "Unable to load saved settings."

@@ -80,56 +80,12 @@ impl TabManager {
         true
     }
 
-    /// Destination is the final zero-based position.
-    pub(crate) fn move_tab(
-        &mut self,
-        id: TabId,
-        destination: usize,
-    ) -> bool {
-        if destination >= self.tabs.len() {
-            return false;
-        }
-
-        let Some(source) = self.position(id) else {
-            return false;
-        };
-
-        if source != destination {
-            let tab = self.tabs.remove(source);
-            self.tabs.insert(destination, tab);
-        }
-
-        true
-    }
-
     pub(crate) fn active_tab_id(&self) -> Option<TabId> {
         self.active_tab
     }
 
-    pub(crate) fn active_tab(&self) -> Option<&Tab> {
-        self.active_tab
-            .and_then(|id| self.get_tab(id))
-    }
-
-    pub(crate) fn get_tab(
-        &self,
-        id: TabId,
-    ) -> Option<&Tab> {
-        self.tabs
-            .iter()
-            .find(|tab| tab.id == id)
-    }
-
     pub(crate) fn tabs(&self) -> &[Tab] {
         &self.tabs
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.tabs.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.tabs.is_empty()
     }
 
     fn position(
@@ -164,10 +120,9 @@ mod tests {
     fn new_manager_is_empty() {
         let manager = TabManager::new();
 
-        assert!(manager.is_empty());
-        assert_eq!(manager.len(), 0);
+        assert!(manager.tabs().is_empty());
+        assert_eq!(manager.tabs().len(), 0);
         assert_eq!(manager.active_tab_id(), None);
-        assert!(manager.active_tab().is_none());
     }
 
     #[test]
@@ -178,10 +133,8 @@ mod tests {
 
         assert_ne!(a, b);
         assert_eq!(ids(&manager), vec![a, b]);
-        assert_eq!(manager.len(), 2);
+        assert_eq!(manager.tabs().len(), 2);
         assert_eq!(manager.active_tab_id(), Some(b));
-        assert_eq!(manager.active_tab().map(Tab::id), Some(b));
-        assert_eq!(manager.get_tab(a).map(Tab::id), Some(a));
     }
 
     #[test]
@@ -219,7 +172,7 @@ mod tests {
         assert!(manager.remove_tab(c));
         assert_eq!(manager.active_tab_id(), Some(a));
         assert!(manager.remove_tab(a));
-        assert!(manager.is_empty());
+        assert!(manager.tabs().is_empty());
         assert_eq!(manager.active_tab_id(), None);
     }
 
@@ -234,29 +187,10 @@ mod tests {
 
         assert_ne!(a, b);
         assert_eq!(a.0.index(), b.0.index());
-        assert!(manager.get_tab(a).is_none());
         assert!(!manager.select_tab(a));
         assert!(!manager.remove_tab(a));
-        assert!(!manager.move_tab(a, 0));
         assert_eq!(manager.active_tab_id(), Some(b));
         assert_eq!(ids(&manager), vec![b]);
-    }
-
-    #[test]
-    fn moves_tabs_without_changing_selection() {
-        let mut manager = TabManager::new();
-        let a = manager.add_tab().unwrap();
-        let b = manager.add_tab().unwrap();
-        let c = manager.add_tab().unwrap();
-
-        assert!(manager.move_tab(c, 0));
-        assert_eq!(ids(&manager), vec![c, a, b]);
-        assert!(manager.move_tab(c, 2));
-        assert_eq!(ids(&manager), vec![a, b, c]);
-        assert!(manager.move_tab(c, 2));
-        assert!(!manager.move_tab(a, 3));
-        assert_eq!(ids(&manager), vec![a, b, c]);
-        assert_eq!(manager.active_tab_id(), Some(c));
     }
 
     #[test]
@@ -264,6 +198,6 @@ mod tests {
         let manager = TabManager::with_capacity(32);
 
         assert!(manager.tabs.capacity() >= 32);
-        assert!(manager.is_empty());
+        assert!(manager.tabs().is_empty());
     }
 }

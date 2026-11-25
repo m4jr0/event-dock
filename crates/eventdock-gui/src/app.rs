@@ -1,8 +1,9 @@
 use crate::action::Action;
 use crate::config::AppConfig;
+use crate::input::{Command, ShortcutManager};
 use crate::settings::{Settings, SettingsManager};
 use crate::tab::TabManager;
-use crate::ui::{shell, tab_bar, theme, windows::Windows};
+use crate::ui::{shell, tab_bar::TabBar, theme, windows::Windows, workspace};
 use eframe::egui;
 
 struct App {
@@ -10,6 +11,8 @@ struct App {
     settings: SettingsManager,
     windows: Windows,
     tabs: TabManager,
+    tab_bar: TabBar,
+    shortcuts: ShortcutManager,
 }
 
 impl App {
@@ -35,6 +38,26 @@ impl App {
             settings,
             windows,
             tabs: TabManager::new(),
+            tab_bar: TabBar::default(),
+            shortcuts: ShortcutManager::default(),
+        }
+    }
+
+    fn handle_command(
+        &mut self,
+        command: Command,
+        ctx: &egui::Context,
+    ) {
+        let action = match command {
+            Command::OpenTab => Some(Action::OpenTab),
+            Command::CloseActiveTab => self
+                .tabs
+                .active_tab_id()
+                .map(Action::CloseTab),
+        };
+
+        if let Some(action) = action {
+            self.handle_action(action, ctx);
         }
     }
 
@@ -47,8 +70,8 @@ impl App {
             Action::OpenTab => {
                 if self.tabs.add_tab().is_none() {
                     self.windows.open_error(
-                        "Tab error",
-                        "Tab identifier space exhausted".into(),
+                        &rust_i18n::t!("tab.error"),
+                        rust_i18n::t!("tab.id_exhausted").to_string(),
                     );
                 }
             }
@@ -105,8 +128,14 @@ impl eframe::App for App {
         ui: &mut egui::Ui,
         _frame: &mut eframe::Frame,
     ) {
+        if let Some(command) = self.shortcuts.consume(ui.ctx()) {
+            self.handle_command(command, ui.ctx());
+        }
+
         let menu_action = egui::Panel::top("menu_bar")
-            .show(ui, shell::show)
+            .show(ui, |ui| {
+                shell::show(ui, &self.shortcuts, self.tabs.active_tab_id())
+            })
             .inner;
 
         if let Some(action) = menu_action {
@@ -114,14 +143,24 @@ impl eframe::App for App {
         }
 
         let tab_action = egui::Panel::top("tab_bar")
-            .show(ui, |ui| tab_bar::show(ui, &self.tabs))
+            .show(ui, |ui| self.tab_bar.show(ui, &self.tabs))
             .inner;
 
         if let Some(action) = tab_action {
+            if let Action::CloseTab(_) = &action {
+                self.tab_bar.on_pointer_close();
+            }
+
             self.handle_action(action, ui.ctx());
         }
 
-        egui::CentralPanel::default().show(ui, |_ui| {});
+        let shortcut = self
+            .shortcuts
+            .label(ui.ctx(), Command::OpenTab);
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            workspace::show(ui, self.tabs.tabs().is_empty(), &shortcut);
+        });
 
         if let Some(action) = self.windows.show(
             ui,

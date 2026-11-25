@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod config;
 mod i18n;
+mod input;
 mod settings;
 mod tab;
 mod ui;
