@@ -1,13 +1,15 @@
 use crate::action::Action;
 use crate::config::AppConfig;
 use crate::settings::{Settings, SettingsManager};
-use crate::ui::{shell, theme, windows::Windows};
+use crate::tab::TabManager;
+use crate::ui::{shell, tab_bar, theme, windows::Windows};
 use eframe::egui;
 
 struct App {
     name: String,
     settings: SettingsManager,
     windows: Windows,
+    tabs: TabManager,
 }
 
 impl App {
@@ -32,6 +34,7 @@ impl App {
             name,
             settings,
             windows,
+            tabs: TabManager::new(),
         }
     }
 
@@ -41,6 +44,23 @@ impl App {
         ctx: &egui::Context,
     ) {
         match action {
+            Action::OpenTab => {
+                if self.tabs.add_tab().is_none() {
+                    self.windows.open_error(
+                        "Tab error",
+                        "Tab identifier space exhausted".into(),
+                    );
+                }
+            }
+
+            Action::CloseTab(id) => {
+                self.tabs.remove_tab(id);
+            }
+
+            Action::SelectTab(id) => {
+                self.tabs.select_tab(id);
+            }
+
             Action::OpenSettings => self.windows.open_settings(),
             Action::OpenAbout => self.windows.open_about(),
             Action::UpdateSettings(change) => self.settings.update(change, ctx),
@@ -90,6 +110,14 @@ impl eframe::App for App {
             .inner;
 
         if let Some(action) = menu_action {
+            self.handle_action(action, ui.ctx());
+        }
+
+        let tab_action = egui::Panel::top("tab_bar")
+            .show(ui, |ui| tab_bar::show(ui, &self.tabs))
+            .inner;
+
+        if let Some(action) = tab_action {
             self.handle_action(action, ui.ctx());
         }
 
