@@ -2,6 +2,7 @@ mod drag;
 mod interaction;
 mod layout;
 mod scroll;
+mod transition;
 
 use crate::action::TabAction;
 use crate::tab::{Tab, TabId, TabManager};
@@ -11,6 +12,7 @@ use eframe::egui;
 use interaction::InteractionState;
 use layout::{CONTROL_BUTTON_WIDTH, StripLayout};
 use scroll::ScrollState;
+use transition::TabTransition;
 
 const SCROLL_LEFT_SYMBOL: &str = "‹";
 const SCROLL_RIGHT_SYMBOL: &str = "›";
@@ -22,6 +24,7 @@ pub(crate) struct TabBar {
     interaction: InteractionState,
     previous: LayoutSnapshot,
     drag: TabDrag,
+    transition: TabTransition,
 }
 
 #[derive(Default)]
@@ -32,6 +35,10 @@ struct LayoutSnapshot {
 }
 
 impl TabBar {
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.drag.is_active()
+    }
+
     pub(crate) fn on_pointer_close(&mut self) {
         self.interaction.on_pointer_close();
     }
@@ -66,6 +73,7 @@ impl TabBar {
             gap,
         );
 
+        self.update_transition(ui, tabs, &layout);
         self.update_offset(tabs, &layout);
         let dt = ui.ctx().input(|input| input.stable_dt);
 
@@ -83,6 +91,32 @@ impl TabBar {
             }
         })
         .inner
+    }
+
+    fn update_transition(
+        &mut self,
+        ui: &egui::Ui,
+        tabs: &TabManager,
+        layout: &StripLayout,
+    ) {
+        if self.drag.is_active() {
+            return;
+        }
+
+        if !layout.overflow {
+            self.transition.clear();
+            return;
+        }
+
+        let closing = tabs.tabs().len() < self.previous.count;
+        let dt = ui.input(|input| input.stable_dt);
+
+        if self
+            .transition
+            .update_positions(tabs, layout, closing, dt)
+        {
+            ui.ctx().request_repaint();
+        }
     }
 
     fn update_offset(
@@ -196,6 +230,7 @@ impl TabBar {
                 layout,
                 viewport,
                 self.scroll.offset(),
+                &mut self.transition,
             );
         }
 
@@ -209,6 +244,12 @@ impl TabBar {
 
         let mut action =
             self.show_viewport_empty_area(ui, tabs, layout, viewport);
+
+        let visible = if self.transition.is_moving() {
+            0..tabs.tabs().len()
+        } else {
+            visible
+        };
 
         for index in visible {
             action = self
@@ -238,9 +279,14 @@ impl TabBar {
                 ),
                 egui::Sense::hover(),
             );
-            return self
-                .drag
-                .show(ui, tabs, layout, viewport, 0.0);
+            return self.drag.show(
+                ui,
+                tabs,
+                layout,
+                viewport,
+                0.0,
+                &mut self.transition,
+            );
         }
         let mut action = None;
 
@@ -348,13 +394,19 @@ impl TabBar {
         let tab = &tabs.tabs()[index];
         let height = viewport.height();
 
-        let left =
-            viewport.left() + layout.tab_left(index) - self.scroll.offset();
+        let left = viewport.left()
+            + layout.tab_left(index)
+            + self.transition.offset(tab.id())
+            - self.scroll.offset();
 
         let bounds = egui::Rect::from_min_size(
             egui::pos2(left, viewport.top()),
             egui::vec2(layout.tab_width, height),
         );
+
+        if !bounds.intersects(viewport) {
+            return None;
+        }
 
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -379,6 +431,7 @@ impl TabBar {
         if let Some(grab_offset) = output.drag_start {
             self.interaction.clear();
             self.scroll.stop();
+            self.transition.clear();
             self.drag
                 .start(tab.id(), grab_offset, ui.ctx());
             return Some(TabAction::Select(tab.id()));

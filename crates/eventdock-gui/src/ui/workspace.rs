@@ -30,6 +30,12 @@ impl Workspace {
         &mut self,
         action: TabAction,
     ) -> Result<(), TabIdExhausted> {
+        if self.tab_bar.is_dragging()
+            && !matches!(&action, TabAction::Select(_))
+        {
+            return Ok(());
+        }
+
         match action {
             TabAction::Open => {
                 self.tabs
@@ -60,7 +66,9 @@ impl Workspace {
             .show(ui, |ui| self.tab_bar.show(ui, &self.tabs))
             .inner;
 
-        if matches!(&action, Some(TabAction::Close(_))) {
+        if !self.tab_bar.is_dragging()
+            && matches!(&action, Some(TabAction::Close(_)))
+        {
             self.tab_bar.on_pointer_close();
         }
 

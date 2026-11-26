@@ -1,10 +1,9 @@
 use super::layout::StripLayout;
+use super::transition::TabTransition;
 use crate::action::TabAction;
 use crate::tab::{TabId, TabManager};
-use crate::ui::animation::exponential_blend;
 use crate::ui::widgets::tab::{paint_drag_preview, paint_tab_preview};
 use eframe::egui;
-use std::collections::HashMap;
 
 const EDGE_SCROLL_ZONE: f32 = 48.0;
 const EDGE_SCROLL_SPEED: f32 = 600.0;
@@ -18,7 +17,6 @@ struct DragState {
 #[derive(Default)]
 pub(super) struct TabDrag {
     state: Option<DragState>,
-    preview_offsets: HashMap<TabId, f32>,
 }
 
 impl TabDrag {
@@ -32,7 +30,6 @@ impl TabDrag {
         grab_offset: f32,
         ctx: &egui::Context,
     ) {
-        self.preview_offsets.clear();
         self.state = Some(DragState { id, grab_offset });
         ctx.request_repaint();
     }
@@ -61,10 +58,6 @@ impl TabDrag {
                 return 0.0;
             };
 
-            if pointer.y < viewport.top() || pointer.y > viewport.bottom() {
-                return 0.0;
-            }
-
             edge_scroll_velocity(pointer.x, viewport.left(), viewport.right())
                 * input.stable_dt.clamp(0.0, 0.05)
         })
@@ -77,6 +70,7 @@ impl TabDrag {
         layout: &StripLayout,
         viewport: egui::Rect,
         offset: f32,
+        transition: &mut TabTransition,
     ) -> Option<TabAction> {
         let drag = self.state?;
         let action = self.finish(ui, tabs, layout, viewport.left(), offset);
@@ -88,7 +82,7 @@ impl TabDrag {
             .iter()
             .position(|tab| tab.id() == drag.id)
         else {
-            self.preview_offsets.clear();
+            transition.clear();
             return action;
         };
 
@@ -105,19 +99,12 @@ impl TabDrag {
             .input(|input| input.stable_dt)
             .clamp(0.0, 0.1);
 
-        let blend = exponential_blend(30.0, dt);
+        transition.update_drag(tabs, layout, source, destination, dt);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(viewport));
         child.set_clip_rect(viewport.intersect(ui.clip_rect()));
 
-        self.paint_neighbors(
-            &child,
-            tabs,
-            layout,
-            viewport,
-            offset,
-            source,
-            destination,
-            blend,
+        Self::paint_neighbors(
+            &child, tabs, layout, viewport, offset, source, transition,
         );
 
         paint_dragged_tab(ui, layout, viewport, offset, dragged_left, drag.id);
@@ -125,45 +112,29 @@ impl TabDrag {
         if self.state.is_some() {
             ui.ctx().request_repaint();
         } else {
-            self.preview_offsets.clear();
+            transition.clear();
             ui.ctx().request_repaint();
         }
 
         action
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Keep preview geometry explicit"
-    )]
     fn paint_neighbors(
-        &mut self,
         ui: &egui::Ui,
         tabs: &TabManager,
         layout: &StripLayout,
         viewport: egui::Rect,
         offset: f32,
         source: usize,
-        destination: usize,
-        blend: f32,
+        transition: &TabTransition,
     ) {
         for (index, tab) in tabs.tabs().iter().enumerate() {
             if index == source {
                 continue;
             }
 
-            let slot = layout.preview_slot(index, source, destination);
-            let target = layout.tab_left(slot) - layout.tab_left(index);
-
-            let shift = self
-                .preview_offsets
-                .entry(tab.id())
-                .or_default();
-
-            *shift += (target - *shift) * blend;
-
-            let left =
-                viewport.left() + layout.tab_left(index) - offset + *shift;
+            let left = viewport.left() + layout.tab_left(index) - offset
+                + transition.offset(tab.id());
 
             let bounds = egui::Rect::from_min_size(
                 egui::pos2(left, viewport.top()),
