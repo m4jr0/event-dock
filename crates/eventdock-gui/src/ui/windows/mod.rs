@@ -2,7 +2,7 @@ mod about;
 mod error;
 mod settings;
 
-use crate::action::Action;
+use crate::action::SettingsAction;
 use crate::i18n::LocaleCatalog;
 use crate::settings::Settings;
 use eframe::egui;
@@ -38,7 +38,7 @@ impl Windows {
         settings: &Settings,
         locales: &LocaleCatalog,
         app_name: &str,
-    ) -> Option<Action> {
+    ) -> Option<SettingsAction> {
         let action = self
             .settings
             .show(ui, settings, locales);

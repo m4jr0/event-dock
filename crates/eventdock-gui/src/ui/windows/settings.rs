@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::SettingsAction;
 use crate::i18n::LocaleCatalog;
 use crate::settings::{Settings, SettingsChange};
 use crate::ui::widgets::button::{ButtonKind, button};
@@ -33,7 +33,7 @@ impl SettingsWindow {
         ui: &mut egui::Ui,
         settings: &Settings,
         locales: &LocaleCatalog,
-    ) -> Option<Action> {
+    ) -> Option<SettingsAction> {
         if !self.dialog.is_open() {
             return None;
         }
@@ -62,12 +62,12 @@ impl SettingsWindow {
             },
         );
 
-        action.or_else(|| change.map(Action::UpdateSettings))
+        action.or_else(|| change.map(SettingsAction::Update))
     }
 
     fn show_configuration(
         ui: &mut egui::Ui,
-        action: &mut Option<Action>,
+        action: &mut Option<SettingsAction>,
     ) {
         ui.label(t!("settings.configuration"));
 
@@ -76,17 +76,17 @@ impl SettingsWindow {
                 (
                     t!("settings.import"),
                     ButtonKind::Secondary,
-                    Action::ImportSettings,
+                    SettingsAction::Import,
                 ),
                 (
                     t!("settings.export"),
                     ButtonKind::Secondary,
-                    Action::ExportSettings,
+                    SettingsAction::Export,
                 ),
                 (
                     t!("settings.reset"),
                     ButtonKind::Danger,
-                    Action::ResetSettings,
+                    SettingsAction::Reset,
                 ),
             ] {
                 if button(ui, label, kind).clicked() {

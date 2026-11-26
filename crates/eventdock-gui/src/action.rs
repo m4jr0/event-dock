@@ -2,14 +2,21 @@ use crate::settings::SettingsChange;
 use crate::tab::TabId;
 
 pub(crate) enum Action {
-    OpenTab,
-    CloseTab(TabId),
-    SelectTab(TabId),
+    Tab(TabAction),
     OpenSettings,
     OpenAbout,
-    UpdateSettings(SettingsChange),
-    ImportSettings,
-    ExportSettings,
-    ResetSettings,
     Exit,
+}
+
+pub(crate) enum TabAction {
+    Open,
+    Close(TabId),
+    Select(TabId),
+}
+
+pub(crate) enum SettingsAction {
+    Update(SettingsChange),
+    Import,
+    Export,
+    Reset,
 }

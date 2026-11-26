@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::{Action, SettingsAction, TabAction};
 use crate::config::AppConfig;
 use crate::input::{Command, ShortcutManager};
 use crate::settings::{Settings, SettingsManager};
@@ -46,11 +46,11 @@ impl App {
         ctx: &egui::Context,
     ) {
         let action = match command {
-            Command::OpenTab => Some(Action::OpenTab),
+            Command::OpenTab => Some(Action::Tab(TabAction::Open)),
             Command::CloseActiveTab => self
                 .workspace
                 .active_tab_id()
-                .map(Action::CloseTab),
+                .map(|id| Action::Tab(TabAction::Close(id))),
         };
 
         if let Some(action) = action {
@@ -64,28 +64,37 @@ impl App {
         ctx: &egui::Context,
     ) {
         match action {
-            Action::OpenTab => {
-                if self.workspace.open_tab().is_err() {
-                    self.windows.open_error(
-                        &rust_i18n::t!("tab.error"),
-                        rust_i18n::t!("tab.id_exhausted").to_string(),
-                    );
-                }
-            }
-
-            Action::CloseTab(id) => {
-                self.workspace.close_tab(id);
-            }
-
-            Action::SelectTab(id) => {
-                self.workspace.select_tab(id);
-            }
-
+            Action::Tab(action) => self.handle_tab_action(action),
             Action::OpenSettings => self.windows.open_settings(),
             Action::OpenAbout => self.windows.open_about(),
-            Action::UpdateSettings(change) => self.settings.update(change, ctx),
+            Action::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+    }
 
-            Action::ImportSettings => {
+    fn handle_tab_action(
+        &mut self,
+        action: TabAction,
+    ) {
+        if self
+            .workspace
+            .handle_action(action)
+            .is_err()
+        {
+            self.windows.open_error(
+                &rust_i18n::t!("tab.error"),
+                rust_i18n::t!("tab.id_exhausted").to_string(),
+            );
+        }
+    }
+
+    fn handle_settings_action(
+        &mut self,
+        action: SettingsAction,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            SettingsAction::Update(change) => self.settings.update(change, ctx),
+            SettingsAction::Import => {
                 if let Err(error) = self.settings.import(ctx) {
                     self.windows.open_error(
                         &rust_i18n::t!("settings.import_error"),
@@ -93,8 +102,7 @@ impl App {
                     );
                 }
             }
-
-            Action::ExportSettings => {
+            SettingsAction::Export => {
                 if let Err(error) = self.settings.export() {
                     self.windows.open_error(
                         &rust_i18n::t!("settings.export_error"),
@@ -102,9 +110,7 @@ impl App {
                     );
                 }
             }
-
-            Action::ResetSettings => self.settings.reset(ctx),
-            Action::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            SettingsAction::Reset => self.settings.reset(ctx),
         }
     }
 }
@@ -140,7 +146,7 @@ impl eframe::App for App {
         }
 
         if let Some(action) = self.workspace.show_tab_bar(ui) {
-            self.handle_action(action, ui.ctx());
+            self.handle_tab_action(action);
         }
 
         let shortcut = self
@@ -158,7 +164,7 @@ impl eframe::App for App {
             self.settings.locales(),
             &self.name,
         ) {
-            self.handle_action(action, ui.ctx());
+            self.handle_settings_action(action, ui.ctx());
         }
     }
 }

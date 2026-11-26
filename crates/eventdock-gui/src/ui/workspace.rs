@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::TabAction;
 use crate::tab::{TabId, TabManager};
 use crate::ui::tab_bar::TabBar;
 use eframe::egui;
@@ -26,36 +26,37 @@ impl Workspace {
         self.tabs.active_tab_id()
     }
 
-    pub(crate) fn open_tab(&mut self) -> Result<(), TabIdExhausted> {
-        self.tabs
-            .add_tab()
-            .map(|_| ())
-            .ok_or(TabIdExhausted)
-    }
-
-    pub(crate) fn close_tab(
+    pub(crate) fn handle_action(
         &mut self,
-        id: TabId,
-    ) {
-        self.tabs.remove_tab(id);
-    }
+        action: TabAction,
+    ) -> Result<(), TabIdExhausted> {
+        match action {
+            TabAction::Open => {
+                self.tabs
+                    .add_tab()
+                    .ok_or(TabIdExhausted)?;
+            }
 
-    pub(crate) fn select_tab(
-        &mut self,
-        id: TabId,
-    ) {
-        self.tabs.select_tab(id);
+            TabAction::Close(id) => {
+                self.tabs.remove_tab(id);
+            }
+
+            TabAction::Select(id) => {
+                self.tabs.select_tab(id);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn show_tab_bar(
         &mut self,
         ui: &mut egui::Ui,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         let action = egui::Panel::top("tab_bar")
             .show(ui, |ui| self.tab_bar.show(ui, &self.tabs))
             .inner;
 
-        if matches!(&action, Some(Action::CloseTab(_))) {
+        if matches!(&action, Some(TabAction::Close(_))) {
             self.tab_bar.on_pointer_close();
         }
 

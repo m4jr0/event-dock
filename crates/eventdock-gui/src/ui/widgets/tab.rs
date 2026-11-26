@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::TabAction;
 use crate::tab::{Tab, TabId};
 use eframe::egui;
 use rust_i18n::t;
@@ -25,7 +25,7 @@ impl<'a> TabWidget<'a> {
         self,
         ui: &mut egui::Ui,
         width: f32,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         let layout = TabLayout::allocate(ui, width);
         let interaction = TabInteraction::detect(ui, &layout);
         let style = TabStyle::resolve(ui, self.selected, &interaction);
@@ -104,14 +104,14 @@ impl TabInteraction {
     fn action(
         &self,
         id: TabId,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         if self.close.clicked()
             || self.close.middle_clicked()
             || self.body.middle_clicked()
         {
-            Some(Action::CloseTab(id))
+            Some(TabAction::Close(id))
         } else if self.body.clicked() {
-            Some(Action::SelectTab(id))
+            Some(TabAction::Select(id))
         } else {
             None
         }

@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::{Action, TabAction};
 use crate::input::{Command, ShortcutManager};
 use crate::tab::TabId;
 use eframe::egui;
@@ -32,7 +32,7 @@ fn show_file_menu(
             t!("tab.new"),
             shortcuts,
             Command::OpenTab,
-            Some(Action::OpenTab),
+            Some(Action::Tab(TabAction::Open)),
             action,
         );
 
@@ -41,7 +41,7 @@ fn show_file_menu(
             t!("tab.close"),
             shortcuts,
             Command::CloseActiveTab,
-            active_tab.map(Action::CloseTab),
+            active_tab.map(|id| Action::Tab(TabAction::Close(id))),
             action,
         );
 

@@ -2,7 +2,7 @@ mod interaction;
 mod layout;
 mod scroll;
 
-use crate::action::Action;
+use crate::action::TabAction;
 use crate::tab::{TabId, TabManager};
 use crate::ui::widgets::tab::TabWidget;
 use eframe::egui;
@@ -37,7 +37,7 @@ impl TabBar {
         &mut self,
         ui: &mut egui::Ui,
         tabs: &TabManager,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         let gap = ui.spacing().item_spacing.x;
 
         let count = tabs.tabs().len();
@@ -137,7 +137,7 @@ impl TabBar {
         ui: &mut egui::Ui,
         tabs: &TabManager,
         layout: &StripLayout,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         let step = layout.stride();
 
         if navigation_button(
@@ -173,7 +173,7 @@ impl TabBar {
         ui: &mut egui::Ui,
         tabs: &TabManager,
         layout: &StripLayout,
-    ) -> Option<Action> {
+    ) -> Option<TabAction> {
         let height = ui.spacing().interact_size.y;
 
         let (viewport, _) = ui.allocate_exact_size(
@@ -223,7 +223,7 @@ impl TabBar {
             );
 
             if response.double_clicked() || response.middle_clicked() {
-                action = Some(Action::OpenTab);
+                action = Some(TabAction::Open);
             }
         }
 
@@ -262,7 +262,7 @@ fn show_tabs(
     ui: &mut egui::Ui,
     tabs: &TabManager,
     width: f32,
-) -> Option<Action> {
+) -> Option<TabAction> {
     let mut action = None;
 
     for tab in tabs.tabs() {
@@ -294,16 +294,16 @@ fn navigation_button(
     .clicked()
 }
 
-fn show_new_tab_button(ui: &mut egui::Ui) -> Option<Action> {
-    navigation_button(ui, NEW_TAB_SYMBOL, true).then_some(Action::OpenTab)
+fn show_new_tab_button(ui: &mut egui::Ui) -> Option<TabAction> {
+    navigation_button(ui, NEW_TAB_SYMBOL, true).then_some(TabAction::Open)
 }
 
-fn show_empty_area(ui: &mut egui::Ui) -> Option<Action> {
+fn show_empty_area(ui: &mut egui::Ui) -> Option<TabAction> {
     let size =
         egui::vec2(ui.available_width().max(0.0), ui.spacing().interact_size.y);
 
     let (_, response) = ui.allocate_exact_size(size, egui::Sense::click());
 
     (response.double_clicked() || response.middle_clicked())
-        .then_some(Action::OpenTab)
+        .then_some(TabAction::Open)
 }
