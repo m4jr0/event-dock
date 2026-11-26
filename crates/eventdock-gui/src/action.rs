@@ -3,6 +3,7 @@ use crate::tab::TabId;
 
 pub(crate) enum Action {
     Tab(TabAction),
+    Settings(SettingsAction),
     OpenSettings,
     OpenAbout,
     Exit,

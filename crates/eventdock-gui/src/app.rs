@@ -5,6 +5,16 @@ use crate::settings::{Settings, SettingsActionError, SettingsManager};
 use crate::ui::{shell, theme, windows::WindowManager, workspace::Workspace};
 use eframe::egui;
 
+type UiStage = fn(&mut App, &mut egui::Ui) -> Option<Action>;
+
+const UI_STAGES: &[UiStage] = &[
+    App::process_shortcuts,
+    App::show_menu,
+    App::show_tab_bar,
+    App::show_workspace,
+    App::show_windows,
+];
+
 struct App {
     name: String,
     settings: SettingsManager,
@@ -40,22 +50,68 @@ impl App {
         }
     }
 
-    fn handle_command(
+    fn process_shortcuts(
         &mut self,
-        command: Command,
-        ctx: &egui::Context,
-    ) {
-        let action = match command {
+        ui: &mut egui::Ui,
+    ) -> Option<Action> {
+        match self.shortcuts.consume(ui.ctx())? {
             Command::OpenTab => Some(Action::Tab(TabAction::Open)),
+
             Command::CloseActiveTab => self
                 .workspace
                 .active_tab_id()
                 .map(|id| Action::Tab(TabAction::Close(id))),
-        };
-
-        if let Some(action) = action {
-            self.handle_action(action, ctx);
         }
+    }
+
+    fn show_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<Action> {
+        egui::Panel::top("menu_bar")
+            .show(ui, |ui| {
+                shell::show(ui, &self.shortcuts, self.workspace.active_tab_id())
+            })
+            .inner
+    }
+
+    fn show_tab_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<Action> {
+        self.workspace
+            .show_tab_bar(ui)
+            .map(Action::Tab)
+    }
+
+    fn show_workspace(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<Action> {
+        let shortcut = self
+            .shortcuts
+            .label(ui.ctx(), Command::OpenTab);
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            self.workspace
+                .show_content(ui, &shortcut);
+        });
+
+        None
+    }
+
+    fn show_windows(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<Action> {
+        self.windows
+            .show(
+                ui,
+                self.settings.current(),
+                self.settings.locales(),
+                &self.name,
+            )
+            .map(Action::Settings)
     }
 
     fn handle_action(
@@ -65,6 +121,11 @@ impl App {
     ) {
         match action {
             Action::Tab(action) => self.handle_tab_action(action),
+
+            Action::Settings(action) => {
+                self.handle_settings_action(action, ctx)
+            }
+
             Action::OpenSettings => self.windows.open_settings(),
             Action::OpenAbout => self.windows.open_about(),
             Action::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -97,6 +158,7 @@ impl App {
                 SettingsActionError::Import(details) => {
                     ("settings.import_error", details)
                 }
+
                 SettingsActionError::Export(details) => {
                     ("settings.export_error", details)
                 }
@@ -124,40 +186,10 @@ impl eframe::App for App {
         ui: &mut egui::Ui,
         _frame: &mut eframe::Frame,
     ) {
-        if let Some(command) = self.shortcuts.consume(ui.ctx()) {
-            self.handle_command(command, ui.ctx());
-        }
-
-        let menu_action = egui::Panel::top("menu_bar")
-            .show(ui, |ui| {
-                shell::show(ui, &self.shortcuts, self.workspace.active_tab_id())
-            })
-            .inner;
-
-        if let Some(action) = menu_action {
-            self.handle_action(action, ui.ctx());
-        }
-
-        if let Some(action) = self.workspace.show_tab_bar(ui) {
-            self.handle_tab_action(action);
-        }
-
-        let shortcut = self
-            .shortcuts
-            .label(ui.ctx(), Command::OpenTab);
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.workspace
-                .show_content(ui, &shortcut);
-        });
-
-        if let Some(action) = self.windows.show(
-            ui,
-            self.settings.current(),
-            self.settings.locales(),
-            &self.name,
-        ) {
-            self.handle_settings_action(action, ui.ctx());
+        for stage in UI_STAGES {
+            if let Some(action) = stage(self, ui) {
+                self.handle_action(action, ui.ctx());
+            }
         }
     }
 }
