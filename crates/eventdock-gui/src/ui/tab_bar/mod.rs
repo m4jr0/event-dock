@@ -1,10 +1,12 @@
+mod drag;
 mod interaction;
 mod layout;
 mod scroll;
 
 use crate::action::TabAction;
-use crate::tab::{TabId, TabManager};
+use crate::tab::{Tab, TabId, TabManager};
 use crate::ui::widgets::tab::TabWidget;
+use drag::TabDrag;
 use eframe::egui;
 use interaction::InteractionState;
 use layout::{CONTROL_BUTTON_WIDTH, StripLayout};
@@ -19,6 +21,7 @@ pub(crate) struct TabBar {
     scroll: ScrollState,
     interaction: InteractionState,
     previous: LayoutSnapshot,
+    drag: TabDrag,
 }
 
 #[derive(Default)]
@@ -74,7 +77,7 @@ impl TabBar {
             if layout.overflow {
                 self.show_overflow(ui, tabs, &layout)
             } else {
-                show_tabs(ui, tabs, layout.tab_width)
+                self.show_tabs(ui, tabs, &layout)
                     .or(show_new_tab_button(ui))
                     .or(show_empty_area(ui))
             }
@@ -105,6 +108,7 @@ impl TabBar {
             active_changed || (!self.interaction.is_frozen() && layout_changed);
 
         if should_reveal
+            && !self.drag.is_active()
             && let Some(index) = tabs
                 .tabs()
                 .iter()
@@ -146,8 +150,10 @@ impl TabBar {
             self.scroll.target_offset() > 0.0,
         ) {
             self.interaction.clear();
+
             self.scroll
                 .scroll_by(-step, layout.max_offset);
+
             ui.ctx().request_repaint();
         }
 
@@ -159,6 +165,7 @@ impl TabBar {
             self.scroll.target_offset() < layout.max_offset,
         ) {
             self.interaction.clear();
+
             self.scroll
                 .scroll_by(step, layout.max_offset);
 
@@ -181,22 +188,18 @@ impl TabBar {
             egui::Sense::hover(),
         );
 
-        if ui.rect_contains_pointer(viewport) {
-            let delta = ui.input_mut(|input| {
-                let delta = input.smooth_scroll_delta;
-                input.smooth_scroll_delta = egui::Vec2::ZERO;
-                delta
-            });
-
-            if delta != egui::Vec2::ZERO {
-                self.interaction.clear();
-                self.scroll.set_target(
-                    (self.scroll.target_offset() - delta.x - delta.y)
-                        .clamp(0.0, layout.max_offset),
-                );
-                ui.ctx().request_repaint();
-            }
+        if self.drag.is_active() {
+            self.handle_drag_scroll(ui, viewport, layout);
+            return self.drag.show(
+                ui,
+                tabs,
+                layout,
+                viewport,
+                self.scroll.offset(),
+            );
         }
+
+        self.handle_scroll_input(ui, viewport, layout);
 
         let visible = layout.visible_range(
             self.scroll.offset(),
@@ -204,6 +207,110 @@ impl TabBar {
             tabs.tabs().len(),
         );
 
+        let mut action =
+            self.show_viewport_empty_area(ui, tabs, layout, viewport);
+
+        for index in visible {
+            action = self
+                .show_viewport_tab(ui, tabs, layout, viewport, index)
+                .or(action);
+        }
+
+        let offset = self.scroll.offset();
+
+        self.drag
+            .finish(ui, tabs, layout, viewport.left(), offset)
+            .or(action)
+    }
+
+    fn show_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        tabs: &TabManager,
+        layout: &StripLayout,
+    ) -> Option<TabAction> {
+        let left = ui.cursor().min.x;
+        if self.drag.is_active() {
+            let (viewport, _) = ui.allocate_exact_size(
+                egui::vec2(
+                    layout.content_width(tabs.tabs().len()),
+                    ui.spacing().interact_size.y,
+                ),
+                egui::Sense::hover(),
+            );
+            return self
+                .drag
+                .show(ui, tabs, layout, viewport, 0.0);
+        }
+        let mut action = None;
+
+        for tab in tabs.tabs() {
+            action = ui
+                .push_id(tab.id(), |ui| {
+                    self.show_tab(
+                        ui,
+                        tab,
+                        tabs.active_tab_id(),
+                        layout.tab_width,
+                    )
+                })
+                .inner
+                .or(action);
+        }
+
+        self.drag
+            .finish(ui, tabs, layout, left, 0.0)
+            .or(action)
+    }
+
+    fn handle_drag_scroll(
+        &mut self,
+        ui: &egui::Ui,
+        viewport: egui::Rect,
+        layout: &StripLayout,
+    ) {
+        let delta = self
+            .drag
+            .edge_scroll_delta(ui, viewport);
+
+        self.scroll
+            .scroll_immediately_by(delta, layout.max_offset);
+    }
+
+    fn handle_scroll_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        viewport: egui::Rect,
+        layout: &StripLayout,
+    ) {
+        if ui.rect_contains_pointer(viewport) {
+            let delta = ui.input_mut(|input| {
+                let delta = input.smooth_scroll_delta;
+                input.smooth_scroll_delta = egui::Vec2::ZERO;
+
+                delta
+            });
+
+            if delta != egui::Vec2::ZERO {
+                self.interaction.clear();
+
+                self.scroll.set_target(
+                    (self.scroll.target_offset() - delta.x - delta.y)
+                        .clamp(0.0, layout.max_offset),
+                );
+
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    fn show_viewport_empty_area(
+        &self,
+        ui: &mut egui::Ui,
+        tabs: &TabManager,
+        layout: &StripLayout,
+        viewport: egui::Rect,
+    ) -> Option<TabAction> {
         let mut action = None;
 
         let content_right = viewport.left()
@@ -227,56 +334,58 @@ impl TabBar {
             }
         }
 
-        for index in visible {
-            let tab = &tabs.tabs()[index];
-
-            let left =
-                viewport.left() + layout.tab_left(index) - self.scroll.offset();
-
-            let bounds = egui::Rect::from_min_size(
-                egui::pos2(left, viewport.top()),
-                egui::vec2(layout.tab_width, height),
-            );
-
-            let mut child = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt(tab.id())
-                    .max_rect(bounds)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            );
-
-            child.set_clip_rect(viewport.intersect(ui.clip_rect()));
-
-            let selected = tabs.active_tab_id() == Some(tab.id());
-
-            action = TabWidget::new(tab, selected)
-                .show(&mut child, layout.tab_width)
-                .or(action);
-        }
-
         action
     }
-}
 
-fn show_tabs(
-    ui: &mut egui::Ui,
-    tabs: &TabManager,
-    width: f32,
-) -> Option<TabAction> {
-    let mut action = None;
+    fn show_viewport_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        tabs: &TabManager,
+        layout: &StripLayout,
+        viewport: egui::Rect,
+        index: usize,
+    ) -> Option<TabAction> {
+        let tab = &tabs.tabs()[index];
+        let height = viewport.height();
 
-    for tab in tabs.tabs() {
-        let selected = tabs.active_tab_id() == Some(tab.id());
+        let left =
+            viewport.left() + layout.tab_left(index) - self.scroll.offset();
 
-        action = ui
-            .push_id(tab.id(), |ui| {
-                TabWidget::new(tab, selected).show(ui, width)
-            })
-            .inner
-            .or(action);
+        let bounds = egui::Rect::from_min_size(
+            egui::pos2(left, viewport.top()),
+            egui::vec2(layout.tab_width, height),
+        );
+
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(tab.id())
+                .max_rect(bounds)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+
+        child.set_clip_rect(viewport.intersect(ui.clip_rect()));
+        self.show_tab(&mut child, tab, tabs.active_tab_id(), layout.tab_width)
     }
 
-    action
+    fn show_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: &Tab,
+        active: Option<TabId>,
+        width: f32,
+    ) -> Option<TabAction> {
+        let output =
+            TabWidget::new(tab, active == Some(tab.id())).show(ui, width);
+        if let Some(grab_offset) = output.drag_start {
+            self.interaction.clear();
+            self.scroll.stop();
+            self.drag
+                .start(tab.id(), grab_offset, ui.ctx());
+            return Some(TabAction::Select(tab.id()));
+        }
+
+        output.action
+    }
 }
 
 fn navigation_button(

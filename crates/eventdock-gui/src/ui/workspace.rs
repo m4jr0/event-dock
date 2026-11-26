@@ -44,6 +44,10 @@ impl Workspace {
             TabAction::Select(id) => {
                 self.tabs.select_tab(id);
             }
+
+            TabAction::Move(id, destination) => {
+                self.tabs.move_tab(id, destination);
+            }
         }
         Ok(())
     }

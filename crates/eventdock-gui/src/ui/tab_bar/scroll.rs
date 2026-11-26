@@ -1,3 +1,5 @@
+use crate::ui::animation::exponential_blend;
+
 const SCROLL_DURATION: f32 = 0.15;
 const SCROLL_EPSILON: f32 = 0.1;
 
@@ -52,6 +54,15 @@ impl ScrollState {
             (self.target_offset + delta).clamp(0.0, max_offset);
     }
 
+    pub(super) fn scroll_immediately_by(
+        &mut self,
+        delta: f32,
+        max_offset: f32,
+    ) {
+        self.offset = (self.offset + delta).clamp(0.0, max_offset);
+        self.target_offset = self.offset;
+    }
+
     // Return whether another UI pass is needed.
     pub(super) fn animate(
         &mut self,
@@ -65,7 +76,7 @@ impl ScrollState {
         }
 
         let dt = dt.clamp(0.0, SCROLL_DURATION);
-        let blend = 1.0 - (-5.0 * dt / SCROLL_DURATION).exp();
+        let blend = exponential_blend(5.0 / SCROLL_DURATION, dt);
         self.offset += distance * blend;
 
         true
@@ -75,6 +86,18 @@ impl ScrollState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immediate_scroll_synchronizes_offsets() {
+        let mut state = ScrollState::default();
+        state.set_target(50.0);
+        state.scroll_immediately_by(200.0, 100.0);
+        assert_eq!(state.offset(), 100.0);
+        assert_eq!(state.target_offset(), 100.0);
+        state.scroll_immediately_by(-200.0, 100.0);
+        assert_eq!(state.offset(), 0.0);
+        assert_eq!(state.target_offset(), 0.0);
+    }
 
     #[test]
     fn scroll_is_bounded() {

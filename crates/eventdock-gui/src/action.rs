@@ -12,6 +12,7 @@ pub(crate) enum TabAction {
     Open,
     Close(TabId),
     Select(TabId),
+    Move(TabId, usize),
 }
 
 pub(crate) enum SettingsAction {

@@ -8,6 +8,11 @@ const TITLE_PADDING: f32 = 4.0;
 const CLOSE_PADDING: f32 = 2.0;
 const CLOSE_SYMBOL: &str = "×";
 
+pub(crate) struct TabOutput {
+    pub(crate) action: Option<TabAction>,
+    pub(crate) drag_start: Option<f32>,
+}
+
 pub(crate) struct TabWidget<'a> {
     tab: &'a Tab,
     selected: bool,
@@ -25,17 +30,91 @@ impl<'a> TabWidget<'a> {
         self,
         ui: &mut egui::Ui,
         width: f32,
-    ) -> Option<TabAction> {
+    ) -> TabOutput {
         let layout = TabLayout::allocate(ui, width);
         let interaction = TabInteraction::detect(ui, &layout);
         let style = TabStyle::resolve(ui, self.selected, &interaction);
 
-        paint_background(ui, &layout, &style);
-        paint_title(ui, &layout, &style);
+        paint_background(ui.painter(), &layout, &style);
+        paint_title(ui, ui.painter(), &layout, &style, self.tab.id());
         paint_close_button(ui, &layout, &style, &interaction);
 
-        interaction.action(self.tab.id())
+        let drag_start = if interaction
+            .body
+            .drag_started_by(egui::PointerButton::Primary)
+        {
+            interaction
+                .body
+                .interact_pointer_pos()
+                .map(|pos| {
+                    pos.x
+                        - interaction.body.drag_delta().x
+                        - layout.bounds.left()
+                })
+        } else {
+            None
+        };
+
+        TabOutput {
+            action: interaction.action(self.tab.id()),
+            drag_start,
+        }
     }
+}
+
+pub(crate) fn paint_drag_preview(
+    ui: &egui::Ui,
+    bounds: egui::Rect,
+    id: TabId,
+    selected: bool,
+) {
+    paint_tab_preview(ui, ui.painter(), bounds, id, selected);
+}
+
+pub(crate) fn paint_tab_preview(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    bounds: egui::Rect,
+    id: TabId,
+    selected: bool,
+) {
+    let layout = TabLayout::from_bounds(bounds);
+    let visuals = ui.visuals();
+    let widget = if selected {
+        &visuals.widgets.active
+    } else {
+        &visuals.widgets.inactive
+    };
+
+    let style = TabStyle {
+        fill: if selected {
+            visuals.selection.bg_fill
+        } else {
+            widget.bg_fill
+        },
+        stroke: if selected {
+            visuals.selection.stroke
+        } else {
+            widget.bg_stroke
+        },
+        text_color: if selected {
+            visuals.selection.stroke.color
+        } else {
+            widget.fg_stroke.color
+        },
+        corner_radius: widget.corner_radius,
+    };
+
+    paint_background(painter, &layout, &style);
+    paint_title(ui, painter, &layout, &style, id);
+
+    painter.text(
+        layout.close.center(),
+        egui::Align2::CENTER_CENTER,
+        CLOSE_SYMBOL,
+        egui::TextStyle::Button.resolve(ui.style()),
+        style.text_color,
+    );
 }
 
 struct TabLayout {
@@ -56,6 +135,10 @@ impl TabLayout {
             egui::Sense::hover(),
         );
 
+        Self::from_bounds(bounds)
+    }
+
+    fn from_bounds(bounds: egui::Rect) -> Self {
         let close = egui::Rect::from_min_max(
             egui::pos2(bounds.right() - CLOSE_WIDTH, bounds.top()),
             bounds.right_bottom(),
@@ -83,8 +166,11 @@ impl TabInteraction {
     ) -> Self {
         let id = ui.scope_id();
 
-        let body =
-            ui.interact(layout.body, id.with("body"), egui::Sense::click());
+        let body = ui.interact(
+            layout.body,
+            id.with("body"),
+            egui::Sense::click_and_drag(),
+        );
 
         let close = ui
             .interact(layout.close, id.with("close"), egui::Sense::click())
@@ -161,11 +247,11 @@ impl TabStyle {
 }
 
 fn paint_background(
-    ui: &egui::Ui,
+    painter: &egui::Painter,
     layout: &TabLayout,
     style: &TabStyle,
 ) {
-    ui.painter().rect(
+    painter.rect(
         layout.bounds,
         style.corner_radius,
         style.fill,
@@ -176,23 +262,40 @@ fn paint_background(
 
 fn paint_title(
     ui: &egui::Ui,
+    painter: &egui::Painter,
     layout: &TabLayout,
     style: &TabStyle,
+    _id: TabId,
 ) {
-    ui.painter()
-        .with_clip_rect(
-            layout
-                .body
-                .shrink2(egui::vec2(TITLE_PADDING, 0.0))
-                .intersect(ui.clip_rect()),
-        )
-        .text(
-            layout.body.center(),
-            egui::Align2::CENTER_CENTER,
-            t!("tab.new"),
-            egui::TextStyle::Button.resolve(ui.style()),
-            style.text_color,
-        );
+    let title = t!("tab.new");
+    #[cfg(debug_assertions)]
+    let title = format!("{} #{}", title, _id.debug_index());
+
+    let bounds = layout
+        .body
+        .shrink2(egui::vec2(TITLE_PADDING, 0.0));
+
+    let galley = painter.layout_no_wrap(
+        title.to_string(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        style.text_color,
+    );
+
+    let position = title_position(bounds, galley.size());
+
+    painter
+        .with_clip_rect(bounds.intersect(painter.clip_rect()))
+        .galley(position, galley, style.text_color);
+}
+
+fn title_position(
+    bounds: egui::Rect,
+    size: egui::Vec2,
+) -> egui::Pos2 {
+    egui::pos2(
+        bounds.left() + ((bounds.width() - size.x) * 0.5).max(0.0),
+        bounds.center().y - size.y * 0.5,
+    )
 }
 
 fn paint_close_button(

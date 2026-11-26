@@ -80,6 +80,30 @@ impl TabManager {
         true
     }
 
+    /// Move a tab to its final zero-based index, preserving selection.
+    /// Return false for an unknown ID or an out-of-bounds destination.
+    pub(crate) fn move_tab(
+        &mut self,
+        id: TabId,
+        destination: usize,
+    ) -> bool {
+        if destination >= self.tabs.len() {
+            return false;
+        }
+
+        let Some(source) = self.position(id) else {
+            return false;
+        };
+
+        if source < destination {
+            self.tabs[source..=destination].rotate_left(1);
+        } else if source > destination {
+            self.tabs[destination..=source].rotate_right(1);
+        }
+
+        true
+    }
+
     pub(crate) fn active_tab_id(&self) -> Option<TabId> {
         self.active_tab
     }
@@ -191,6 +215,60 @@ mod tests {
         assert!(!manager.remove_tab(a));
         assert_eq!(manager.active_tab_id(), Some(b));
         assert_eq!(ids(&manager), vec![b]);
+    }
+
+    #[test]
+    fn moves_tab_right_and_left() {
+        let mut manager = TabManager::new();
+        let a = manager.add_tab().unwrap();
+        let b = manager.add_tab().unwrap();
+        let c = manager.add_tab().unwrap();
+        let d = manager.add_tab().unwrap();
+
+        assert!(manager.move_tab(b, 3));
+        assert_eq!(ids(&manager), vec![a, c, d, b]);
+        assert!(manager.move_tab(b, 0));
+        assert_eq!(ids(&manager), vec![b, a, c, d]);
+        assert_eq!(manager.active_tab_id(), Some(d));
+    }
+
+    #[test]
+    fn moving_active_tab_preserves_selection() {
+        let mut manager = TabManager::new();
+        let a = manager.add_tab().unwrap();
+        let b = manager.add_tab().unwrap();
+        let c = manager.add_tab().unwrap();
+
+        assert!(manager.move_tab(c, 0));
+        assert_eq!(ids(&manager), vec![c, a, b]);
+        assert_eq!(manager.active_tab_id(), Some(c));
+        assert!(manager.remove_tab(c));
+        assert_eq!(manager.active_tab_id(), Some(a));
+    }
+
+    #[test]
+    fn moving_to_same_index_succeeds_without_changes() {
+        let mut manager = TabManager::new();
+        let a = manager.add_tab().unwrap();
+        assert!(manager.move_tab(a, 0));
+        assert_eq!(ids(&manager), vec![a]);
+        assert_eq!(manager.active_tab_id(), Some(a));
+    }
+
+    #[test]
+    fn rejects_invalid_destination_and_stale_id() {
+        let mut manager = TabManager::new();
+        let stale = manager.add_tab().unwrap();
+        assert!(manager.remove_tab(stale));
+        assert!(!manager.move_tab(stale, 0));
+
+        let a = manager.add_tab().unwrap();
+        let b = manager.add_tab().unwrap();
+        assert!(!manager.move_tab(stale, 1));
+        assert!(!manager.move_tab(a, 2));
+        assert!(!manager.move_tab(a, usize::MAX));
+        assert_eq!(ids(&manager), vec![a, b]);
+        assert_eq!(manager.active_tab_id(), Some(b));
     }
 
     #[test]

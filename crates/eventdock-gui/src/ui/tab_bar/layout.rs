@@ -63,6 +63,33 @@ impl StripLayout {
         (count as f32 * self.stride() - self.gap).max(0.0)
     }
 
+    // Convert the dragged tab's center to its nearest slot.
+    pub(super) fn drag_destination(
+        &self,
+        center: f32,
+        count: usize,
+    ) -> usize {
+        (((center - self.tab_width * 0.5) / self.stride()).round() as usize)
+            .min(count.saturating_sub(1))
+    }
+
+    pub(super) fn preview_slot(
+        &self,
+        index: usize,
+        source: usize,
+        destination: usize,
+    ) -> usize {
+        if index == source {
+            destination
+        } else if source < index && index <= destination {
+            index - 1
+        } else if destination <= index && index < source {
+            index + 1
+        } else {
+            index
+        }
+    }
+
     pub(super) fn visible_range(
         &self,
         offset: f32,
@@ -151,6 +178,33 @@ mod tests {
         assert_eq!(layout.visible_range(100.0, 256.0, 2), 1..2);
         assert_eq!(layout.visible_range(500.0, 256.0, 2), 2..2);
         assert_eq!(layout.visible_range(0.0, 256.0, 0), 0..0);
+    }
+
+    #[test]
+    fn drag_destination_clamps_and_rounds() {
+        let layout = StripLayout::calculate(340.0, 10, 4.0);
+        assert_eq!(layout.drag_destination(-100.0, 10), 0);
+        assert_eq!(layout.drag_destination(91.0, 10), 0);
+        assert_eq!(layout.drag_destination(93.0, 10), 1);
+        assert_eq!(layout.drag_destination(10000.0, 10), 9);
+        assert_eq!(layout.drag_destination(100.0, 0), 0);
+    }
+
+    #[test]
+    fn preview_slots_preserve_neighbor_order() {
+        let layout = StripLayout::calculate(600.0, 4, 4.0);
+        assert_eq!(
+            (0..4)
+                .map(|i| layout.preview_slot(i, 1, 3))
+                .collect::<Vec<_>>(),
+            vec![0, 3, 1, 2]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| layout.preview_slot(i, 3, 0))
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 0]
+        );
     }
 
     #[test]

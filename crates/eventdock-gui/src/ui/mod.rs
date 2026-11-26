@@ -1,3 +1,4 @@
+mod animation;
 pub(crate) mod shell;
 pub(crate) mod tab_bar;
 pub(crate) mod theme;
