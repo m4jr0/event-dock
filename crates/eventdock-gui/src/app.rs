@@ -1,14 +1,14 @@
 use crate::action::{Action, SettingsAction, TabAction};
 use crate::config::AppConfig;
 use crate::input::{Command, ShortcutManager};
-use crate::settings::{Settings, SettingsManager};
-use crate::ui::{shell, theme, windows::Windows, workspace::Workspace};
+use crate::settings::{Settings, SettingsActionError, SettingsManager};
+use crate::ui::{shell, theme, windows::WindowManager, workspace::Workspace};
 use eframe::egui;
 
 struct App {
     name: String,
     settings: SettingsManager,
-    windows: Windows,
+    windows: WindowManager,
     workspace: Workspace,
     shortcuts: ShortcutManager,
 }
@@ -24,7 +24,7 @@ impl App {
         let (settings, error) =
             SettingsManager::new(&cc.egui_ctx, defaults, cc.storage);
 
-        let mut windows = Windows::default();
+        let mut windows = WindowManager::default();
 
         if let Some(error) = error {
             windows.open_settings();
@@ -92,25 +92,18 @@ impl App {
         action: SettingsAction,
         ctx: &egui::Context,
     ) {
-        match action {
-            SettingsAction::Update(change) => self.settings.update(change, ctx),
-            SettingsAction::Import => {
-                if let Err(error) = self.settings.import(ctx) {
-                    self.windows.open_error(
-                        &rust_i18n::t!("settings.import_error"),
-                        error,
-                    );
+        if let Err(error) = self.settings.handle_action(action, ctx) {
+            let (summary, details) = match error {
+                SettingsActionError::Import(details) => {
+                    ("settings.import_error", details)
                 }
-            }
-            SettingsAction::Export => {
-                if let Err(error) = self.settings.export() {
-                    self.windows.open_error(
-                        &rust_i18n::t!("settings.export_error"),
-                        error,
-                    );
+                SettingsActionError::Export(details) => {
+                    ("settings.export_error", details)
                 }
-            }
-            SettingsAction::Reset => self.settings.reset(ctx),
+            };
+
+            self.windows
+                .open_error(&rust_i18n::t!(summary), details);
         }
     }
 }

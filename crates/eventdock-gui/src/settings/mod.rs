@@ -3,7 +3,7 @@ mod manager;
 mod storage;
 mod transfer;
 
-pub(crate) use manager::SettingsManager;
+pub(crate) use manager::{SettingsActionError, SettingsManager};
 
 use eframe::egui::ThemePreference;
 

@@ -8,13 +8,13 @@ use crate::settings::Settings;
 use eframe::egui;
 
 #[derive(Default)]
-pub(crate) struct Windows {
+pub(crate) struct WindowManager {
     settings: settings::SettingsWindow,
     about: about::AboutWindow,
     error: error::ErrorWindow,
 }
 
-impl Windows {
+impl WindowManager {
     pub(crate) fn open_error(
         &mut self,
         summary: &str,

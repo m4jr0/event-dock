@@ -1,4 +1,5 @@
 use super::{Settings, SettingsChange, storage, transfer};
+use crate::action::SettingsAction;
 use crate::i18n::{Locale, LocaleCatalog};
 use eframe::egui;
 
@@ -8,7 +9,35 @@ pub(crate) struct SettingsManager {
     writable: bool,
 }
 
+#[derive(Debug)]
+pub(crate) enum SettingsActionError {
+    Import(String),
+    Export(String),
+}
+
 impl SettingsManager {
+    pub(crate) fn handle_action(
+        &mut self,
+        action: SettingsAction,
+        ctx: &egui::Context,
+    ) -> Result<(), SettingsActionError> {
+        match action {
+            SettingsAction::Update(change) => self.update(change, ctx),
+
+            SettingsAction::Import => self
+                .import(ctx)
+                .map_err(SettingsActionError::Import)?,
+
+            SettingsAction::Export => self
+                .export()
+                .map_err(SettingsActionError::Export)?,
+
+            SettingsAction::Reset => self.reset(ctx),
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn new(
         ctx: &egui::Context,
         defaults: Settings,
@@ -38,13 +67,14 @@ impl SettingsManager {
         &self.locales
     }
 
-    pub(crate) fn update(
+    fn update(
         &mut self,
         change: SettingsChange,
         ctx: &egui::Context,
     ) {
         match change {
             SettingsChange::Locale(locale) => self.settings.locale = locale,
+
             SettingsChange::ThemePreference(theme) => {
                 self.settings.theme = theme
             }
@@ -78,14 +108,14 @@ impl SettingsManager {
         self.writable = true;
     }
 
-    pub(crate) fn reset(
+    fn reset(
         &mut self,
         ctx: &egui::Context,
     ) {
         self.replace(Settings::default(), ctx);
     }
 
-    pub(crate) fn import(
+    fn import(
         &mut self,
         ctx: &egui::Context,
     ) -> Result<(), String> {
@@ -96,7 +126,7 @@ impl SettingsManager {
         Ok(())
     }
 
-    pub(crate) fn export(&self) -> Result<(), String> {
+    fn export(&self) -> Result<(), String> {
         transfer::pick_export(&self.settings)
     }
 
