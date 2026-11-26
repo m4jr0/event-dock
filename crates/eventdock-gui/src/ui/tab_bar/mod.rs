@@ -4,7 +4,7 @@ use crate::action::Action;
 use crate::tab::{TabId, TabManager};
 use crate::ui::widgets::tab::TabWidget;
 use eframe::egui;
-use layout::{CONTROL_WIDTH, StripLayout};
+use layout::{CONTROL_BUTTON_WIDTH, StripLayout};
 
 const SCROLL_LEFT_SYMBOL: &str = "‹";
 const SCROLL_RIGHT_SYMBOL: &str = "›";
@@ -119,7 +119,11 @@ impl TabBar {
                 .iter()
                 .position(|tab| Some(tab.id()) == active)
         {
-            self.target_offset = layout.reveal(self.target_offset, index, gap);
+            self.target_offset = layout.offset_for_tab_visibility(
+                self.target_offset,
+                index,
+                gap,
+            );
         }
 
         if !layout.overflow {
@@ -303,8 +307,10 @@ fn navigation_button(
 ) -> bool {
     ui.add_enabled(
         enabled,
-        egui::Button::new(label)
-            .min_size(egui::vec2(CONTROL_WIDTH, ui.spacing().interact_size.y)),
+        egui::Button::new(label).min_size(egui::vec2(
+            CONTROL_BUTTON_WIDTH,
+            ui.spacing().interact_size.y,
+        )),
     )
     .clicked()
 }

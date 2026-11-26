@@ -1,6 +1,6 @@
 const PREFERRED_WIDTH: f32 = 134.0;
 const MIN_WIDTH: f32 = 90.0;
-pub(super) const CONTROL_WIDTH: f32 = 24.0;
+pub(super) const CONTROL_BUTTON_WIDTH: f32 = 24.0;
 
 pub(super) struct StripLayout {
     pub(super) tab_width: f32,
@@ -15,15 +15,20 @@ impl StripLayout {
         count: usize,
         gap: f32,
     ) -> Self {
-        let count = count as f32;
-        let available = (width - CONTROL_WIDTH - count * gap).max(0.0);
-        let fitting_width = available / count.max(1.0);
-        let overflow = count > 0.0 && fitting_width < MIN_WIDTH;
+        let count_f32 = count as f32;
+
+        let available =
+            (width - CONTROL_BUTTON_WIDTH - count_f32 * gap).max(0.0);
+
+        let fitting_width = available / count.max(1) as f32;
+        let overflow = count > 0 && fitting_width < MIN_WIDTH;
         let tab_width = fitting_width.clamp(MIN_WIDTH, PREFERRED_WIDTH);
-        let content = count * tab_width + (count - 1.0).max(0.0) * gap;
+
+        let content =
+            count_f32 * tab_width + count.saturating_sub(1) as f32 * gap;
 
         let viewport_width = if overflow {
-            (width - 3.0 * (CONTROL_WIDTH + gap)).max(0.0)
+            (width - 3.0 * (CONTROL_BUTTON_WIDTH + gap)).max(0.0)
         } else {
             content
         };
@@ -36,7 +41,7 @@ impl StripLayout {
         }
     }
 
-    pub(super) fn reveal(
+    pub(super) fn offset_for_tab_visibility(
         &self,
         offset: f32,
         index: usize,
@@ -84,7 +89,10 @@ mod tests {
         assert!(layout.overflow);
         assert_eq!(layout.tab_width, MIN_WIDTH);
         assert_eq!(layout.viewport_width, 256.0);
-        assert_eq!(layout.reveal(0.0, 9, 4.0), layout.max_offset);
+        assert_eq!(
+            layout.offset_for_tab_visibility(0.0, 9, 4.0),
+            layout.max_offset
+        );
     }
     #[test]
     fn empty_strip_does_not_overflow() {
