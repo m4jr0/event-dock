@@ -270,6 +270,7 @@ impl TabBar {
                 .show(&mut child, layout.tab_width)
                 .or(action);
         }
+
         action
     }
 }
