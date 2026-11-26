@@ -1,32 +1,36 @@
+mod interaction;
 mod layout;
+mod scroll;
 
 use crate::action::Action;
 use crate::tab::{TabId, TabManager};
 use crate::ui::widgets::tab::TabWidget;
 use eframe::egui;
+use interaction::InteractionState;
 use layout::{CONTROL_BUTTON_WIDTH, StripLayout};
+use scroll::ScrollState;
 
 const SCROLL_LEFT_SYMBOL: &str = "‹";
 const SCROLL_RIGHT_SYMBOL: &str = "›";
 const NEW_TAB_SYMBOL: &str = "+";
 
-const SCROLL_DURATION: f32 = 0.15;
-const SCROLL_EPSILON: f32 = 0.1;
-
 #[derive(Default)]
 pub(crate) struct TabBar {
-    offset: f32,
-    target_offset: f32,
-    previous_count: usize,
-    pointer_close_pending: bool,
-    closing_layout_count: Option<usize>,
-    previous_active: Option<TabId>,
-    previous_viewport: f32,
+    scroll: ScrollState,
+    interaction: InteractionState,
+    previous: LayoutSnapshot,
+}
+
+#[derive(Default)]
+struct LayoutSnapshot {
+    count: usize,
+    active: Option<TabId>,
+    viewport_width: f32,
 }
 
 impl TabBar {
     pub(crate) fn on_pointer_close(&mut self) {
-        self.pointer_close_pending = true;
+        self.interaction.on_pointer_close();
     }
 
     pub(crate) fn show(
@@ -44,24 +48,31 @@ impl TabBar {
             egui::vec2(width, ui.spacing().interact_size.y),
         );
 
-        let closing = count < self.previous_count;
-        let pointer_close = std::mem::take(&mut self.pointer_close_pending);
         let hovering = ui.rect_contains_pointer(strip);
-        self.update_closing_layout(count, closing, pointer_close, hovering);
+
+        if self
+            .interaction
+            .update(count, self.previous.count, hovering)
+        {
+            self.scroll.stop();
+        }
 
         let layout = StripLayout::calculate(
             width,
-            self.closing_layout_count
-                .unwrap_or(count),
+            self.interaction.layout_count(count),
             gap,
         );
 
-        self.update_offset(tabs, &layout, gap);
-        self.animate_offset(ui.ctx());
+        self.update_offset(tabs, &layout);
+        let dt = ui.ctx().input(|input| input.stable_dt);
+
+        if self.scroll.animate(dt) {
+            ui.ctx().request_repaint();
+        }
 
         ui.horizontal(|ui| {
             if layout.overflow {
-                self.show_overflow(ui, tabs, &layout, gap)
+                self.show_overflow(ui, tabs, &layout)
             } else {
                 show_tabs(ui, tabs, layout.tab_width)
                     .or(show_new_tab_button(ui))
@@ -71,47 +82,27 @@ impl TabBar {
         .inner
     }
 
-    fn update_closing_layout(
-        &mut self,
-        count: usize,
-        closing: bool,
-        pointer_close: bool,
-        hovering: bool,
-    ) {
-        if count == 0 || count > self.previous_count {
-            self.closing_layout_count = None;
-        } else if closing && pointer_close {
-            self.closing_layout_count = Some(
-                self.closing_layout_count
-                    .unwrap_or(self.previous_count),
-            );
-
-            self.target_offset = self.offset;
-        } else if closing || !hovering {
-            self.closing_layout_count = None;
-        }
-    }
-
     fn update_offset(
         &mut self,
         tabs: &TabManager,
         layout: &StripLayout,
-        gap: f32,
     ) {
         let active = tabs.active_tab_id();
         let count = tabs.tabs().len();
-        let viewport_changed = layout.viewport_width != self.previous_viewport;
-        let count_changed = count != self.previous_count;
 
-        self.target_offset = self
-            .target_offset
-            .clamp(0.0, layout.max_offset);
+        let viewport_changed =
+            layout.viewport_width != self.previous.viewport_width;
 
-        let active_changed = active != self.previous_active;
+        let count_changed = count != self.previous.count;
+
+        self.scroll
+            .clamp_target(layout.max_offset);
+
+        let active_changed = active != self.previous.active;
         let layout_changed = viewport_changed || count_changed;
 
-        let should_reveal = active_changed
-            || (self.closing_layout_count.is_none() && layout_changed);
+        let should_reveal =
+            active_changed || (!self.interaction.is_frozen() && layout_changed);
 
         if should_reveal
             && let Some(index) = tabs
@@ -119,44 +110,26 @@ impl TabBar {
                 .iter()
                 .position(|tab| Some(tab.id()) == active)
         {
-            self.target_offset = layout.offset_for_tab_visibility(
-                self.target_offset,
-                index,
-                gap,
+            self.scroll.set_target(
+                layout.offset_for_tab_visibility(
+                    self.scroll.target_offset(),
+                    index,
+                ),
             );
         }
 
         if !layout.overflow {
-            self.offset = 0.0;
+            self.scroll.clamp_offset(0.0);
         } else if viewport_changed {
-            self.offset = self
-                .offset
-                .clamp(0.0, layout.max_offset);
+            self.scroll
+                .clamp_offset(layout.max_offset);
         }
 
-        self.previous_active = active;
-        self.previous_viewport = layout.viewport_width;
-        self.previous_count = count;
-    }
-
-    fn animate_offset(
-        &mut self,
-        ctx: &egui::Context,
-    ) {
-        let distance = self.target_offset - self.offset;
-
-        if distance.abs() <= SCROLL_EPSILON {
-            self.offset = self.target_offset;
-            return;
-        }
-
-        let dt = ctx
-            .input(|input| input.stable_dt)
-            .clamp(0.0, SCROLL_DURATION);
-
-        let blend = 1.0 - (-5.0 * dt / SCROLL_DURATION).exp();
-        self.offset += distance * blend;
-        ctx.request_repaint();
+        self.previous = LayoutSnapshot {
+            active,
+            count,
+            viewport_width: layout.viewport_width,
+        };
     }
 
     fn show_overflow(
@@ -164,27 +137,30 @@ impl TabBar {
         ui: &mut egui::Ui,
         tabs: &TabManager,
         layout: &StripLayout,
-        gap: f32,
     ) -> Option<Action> {
-        let step = layout.tab_width + gap;
+        let step = layout.stride();
 
-        if navigation_button(ui, SCROLL_LEFT_SYMBOL, self.target_offset > 0.0) {
-            self.closing_layout_count = None;
-            self.target_offset = (self.target_offset - step).max(0.0);
+        if navigation_button(
+            ui,
+            SCROLL_LEFT_SYMBOL,
+            self.scroll.target_offset() > 0.0,
+        ) {
+            self.interaction.clear();
+            self.scroll
+                .scroll_by(-step, layout.max_offset);
             ui.ctx().request_repaint();
         }
 
-        let action = self.show_viewport(ui, tabs, layout, gap);
+        let action = self.show_viewport(ui, tabs, layout);
 
         if navigation_button(
             ui,
             SCROLL_RIGHT_SYMBOL,
-            self.target_offset < layout.max_offset,
+            self.scroll.target_offset() < layout.max_offset,
         ) {
-            self.closing_layout_count = None;
-
-            self.target_offset =
-                (self.target_offset + step).min(layout.max_offset);
+            self.interaction.clear();
+            self.scroll
+                .scroll_by(step, layout.max_offset);
 
             ui.ctx().request_repaint();
         }
@@ -197,7 +173,6 @@ impl TabBar {
         ui: &mut egui::Ui,
         tabs: &TabManager,
         layout: &StripLayout,
-        gap: f32,
     ) -> Option<Action> {
         let height = ui.spacing().interact_size.y;
 
@@ -214,24 +189,26 @@ impl TabBar {
             });
 
             if delta != egui::Vec2::ZERO {
-                self.closing_layout_count = None;
-                self.target_offset = (self.target_offset - delta.x - delta.y)
-                    .clamp(0.0, layout.max_offset);
+                self.interaction.clear();
+                self.scroll.set_target(
+                    (self.scroll.target_offset() - delta.x - delta.y)
+                        .clamp(0.0, layout.max_offset),
+                );
                 ui.ctx().request_repaint();
             }
         }
 
-        let stride = layout.tab_width + gap;
-        let first = (self.offset / stride).floor() as usize;
-
-        let end = (((self.offset + viewport.width()) / stride).ceil() as usize)
-            .min(tabs.tabs().len());
+        let visible = layout.visible_range(
+            self.scroll.offset(),
+            viewport.width(),
+            tabs.tabs().len(),
+        );
 
         let mut action = None;
 
         let content_right = viewport.left()
-            + (tabs.tabs().len() as f32 * stride - gap).max(0.0)
-            - self.offset;
+            + layout.content_width(tabs.tabs().len())
+            - self.scroll.offset();
 
         if content_right < viewport.right() {
             let empty = egui::Rect::from_min_max(
@@ -250,9 +227,11 @@ impl TabBar {
             }
         }
 
-        for index in first..end {
+        for index in visible {
             let tab = &tabs.tabs()[index];
-            let left = viewport.left() + index as f32 * stride - self.offset;
+
+            let left =
+                viewport.left() + layout.tab_left(index) - self.scroll.offset();
 
             let bounds = egui::Rect::from_min_size(
                 egui::pos2(left, viewport.top()),
