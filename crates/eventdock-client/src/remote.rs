@@ -45,9 +45,14 @@ impl RemoteTransport {
         let (jobs, receiver) = flume::bounded::<Job>(capacity);
         let running = Arc::new(AtomicBool::new(true));
         let worker_running = Arc::clone(&running);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
         let worker = thread::Builder::new()
             .name("eventdock-client".into())
-            .spawn(move || run_worker(address, receiver, &worker_running))?;
+            .spawn(move || {
+                run_worker(address, receiver, &worker_running, &runtime)
+            })?;
         Ok(Self {
             jobs: Some(jobs),
             running,
@@ -103,13 +108,14 @@ fn run_worker(
     address: SocketAddr,
     receiver: flume::Receiver<Job>,
     running: &AtomicBool,
+    runtime: &tokio::runtime::Runtime,
 ) {
     while let Ok(job) = receiver.recv() {
         if !running.load(Ordering::Acquire) {
             break;
         }
         if !job.reply.is_cancelled() {
-            let result = query(address, &job, running);
+            let result = query(address, &job, running, runtime);
             job.reply.complete(result);
         }
     }
@@ -186,13 +192,31 @@ impl Write for RequestIo<'_> {
     }
 }
 
+// Keep the same connection attempt alive while checking cancellation.
+async fn connect(
+    address: SocketAddr,
+    job: &Job,
+    running: &AtomicBool,
+) -> io::Result<TcpStream> {
+    let mut attempt = std::pin::pin!(tokio::net::TcpStream::connect(address));
+    loop {
+        let wait = remaining(job, running)?.min(POLL_INTERVAL);
+        if let Ok(result) = tokio::time::timeout(wait, attempt.as_mut()).await {
+            remaining(job, running)?;
+            let stream = result?.into_std()?;
+            stream.set_nonblocking(false)?;
+            return Ok(stream);
+        }
+    }
+}
+
 fn query(
     address: SocketAddr,
     job: &Job,
     running: &AtomicBool,
+    runtime: &tokio::runtime::Runtime,
 ) -> io::Result<QueryResponse> {
-    let stream =
-        TcpStream::connect_timeout(&address, remaining(job, running)?)?;
+    let stream = runtime.block_on(connect(address, job, running))?;
     let mut stream = RequestIo {
         stream,
         job,
@@ -227,6 +251,52 @@ fn query(
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn dropping_transport_cancels_active_and_queued_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let transport =
+            RemoteTransport::new(listener.local_addr().unwrap(), 1).unwrap();
+        let request = QueryRequest {
+            limit: 1,
+            before_id: None,
+            level: None,
+        };
+        let active = transport.submit(request).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "connection stalled");
+                    thread::sleep(POLL_INTERVAL);
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.ends_with('\n'));
+        let queued = transport.submit(request).unwrap();
+        let start = Instant::now();
+        drop(transport);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            active.recv().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(
+            queued.recv().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+    }
 
     #[test]
     fn dropping_pending_releases_active_connection() {

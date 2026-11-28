@@ -1341,6 +1341,7 @@ dependencies = [
  "eventdock-protocol",
  "flume",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
