@@ -45,6 +45,13 @@ impl ByteBudget {
         self.semaphore.available_permits()
     }
 
+    pub fn usage(&self) -> crate::ByteBudgetUsage {
+        crate::ByteBudgetUsage {
+            capacity: self.capacity,
+            unavailable_bytes: self.capacity - self.available_bytes(),
+        }
+    }
+
     fn permit_count(
         &self,
         bytes: usize,
@@ -106,6 +113,21 @@ mod tests {
         assert!(budget.try_reserve(0).is_none());
         assert!(budget.try_reserve(11).is_none());
         assert_eq!(budget.available_bytes(), 10);
+    }
+
+    #[test]
+    fn usage_reports_unavailable_permits() {
+        let budget = ByteBudget::new(10).unwrap();
+        let held = budget.try_reserve(7).unwrap();
+        assert_eq!(
+            budget.usage(),
+            crate::ByteBudgetUsage {
+                capacity: 10,
+                unavailable_bytes: 7
+            }
+        );
+        drop(held);
+        assert_eq!(budget.usage().unavailable_bytes, 0);
     }
 
     #[test]

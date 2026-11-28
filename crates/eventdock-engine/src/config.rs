@@ -40,6 +40,18 @@ impl Default for BackendConfig {
 }
 
 impl BackendConfig {
+    /// Describe configured allowances, not a process memory ceiling.
+    pub fn resource_limits(&self) -> crate::ResourceLimits {
+        crate::ResourceLimits {
+            retained_payload_bytes: self.payload_capacity,
+            retained_events: self.event_capacity,
+            ingestion_frame_bytes: self.ingestion_byte_capacity,
+            queued_events: self.queue_capacity,
+            queued_queries: self.query_queue_capacity,
+            producer_connections: self.max_connections,
+        }
+    }
+
     pub(crate) fn validate(&self) -> io::Result<()> {
         if self.storage_worker_count == 0
             || self.event_capacity == 0

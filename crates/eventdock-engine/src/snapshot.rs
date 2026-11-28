@@ -62,6 +62,13 @@ pub struct PendingWorkUsage {
     pub active_query: bool,
 }
 
+/// Sample unavailable permits, including permits assigned to waiting acquisitions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ByteBudgetUsage {
+    pub capacity: usize,
+    pub unavailable_bytes: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackendSnapshot {
     pub stored_total: u64,
@@ -71,5 +78,7 @@ pub struct BackendSnapshot {
     pub storage_memory: StorageMemoryUsage,
     pub retention: RetentionStatistics,
     pub pending_work: PendingWorkUsage,
+    /// Sample ingestion admission separately from the periodic storage snapshot.
+    pub ingestion_budget: ByteBudgetUsage,
     pub network: NetworkSnapshot,
 }

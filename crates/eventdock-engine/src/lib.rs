@@ -4,6 +4,7 @@ mod ingestion;
 mod query;
 pub mod query_protocol;
 mod resource_budget;
+mod resource_limits;
 mod shared_snapshot;
 mod snapshot;
 mod storage;
@@ -12,9 +13,10 @@ mod transport;
 pub use backend::{Backend, PendingQuery};
 pub use config::BackendConfig;
 pub use resource_budget::{ByteBudget, ByteReservation};
+pub use resource_limits::ResourceLimits;
 pub use snapshot::{
-    BackendSnapshot, NetworkSnapshot, PendingWorkUsage, QueueUsage,
-    RetentionStatistics, StorageMemoryUsage,
+    BackendSnapshot, ByteBudgetUsage, NetworkSnapshot, PendingWorkUsage,
+    QueueUsage, RetentionStatistics, StorageMemoryUsage,
 };
 
 pub use eventdock_protocol::{EventQuery, EventQueryResult, QueriedEvent};

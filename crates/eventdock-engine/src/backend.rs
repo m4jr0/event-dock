@@ -79,6 +79,7 @@ pub struct Backend {
     snapshot: Arc<SharedSnapshot>,
     query_sender: Option<flume::Sender<QueryRequest>>,
     max_query_events: usize,
+    ingestion_budget: crate::ByteBudget,
 }
 
 impl Backend {
@@ -94,11 +95,13 @@ impl Backend {
         let counters = Arc::new(Counters::default());
         let snapshot = Arc::new(SharedSnapshot::default());
 
+        let ingestion_budget =
+            crate::ByteBudget::new(config.ingestion_byte_capacity)
+                .expect("validated ingestion budget");
         let limits = CollectorLimits {
             max_connections: config.max_connections,
             max_event_bytes: config.max_event_bytes,
-            budget: crate::ByteBudget::new(config.ingestion_byte_capacity)
-                .expect("validated ingestion budget"),
+            budget: ingestion_budget.clone(),
         };
 
         let network_runtime = NetworkRuntime::new()?;
@@ -134,6 +137,7 @@ impl Backend {
             address,
             query_sender: Some(query_sender),
             max_query_events,
+            ingestion_budget,
             network: Some(network),
             _network_runtime: network_runtime,
             storage: Some(storage),
@@ -215,7 +219,9 @@ impl Backend {
 
     /// Returns the latest periodically published snapshot without waiting for storage work.
     pub fn snapshot(&self) -> BackendSnapshot {
-        self.snapshot.read()
+        let mut snapshot = self.snapshot.read();
+        snapshot.ingestion_budget = self.ingestion_budget.usage();
+        snapshot
     }
 
     pub fn is_running(&self) -> bool {
