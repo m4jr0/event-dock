@@ -1,6 +1,6 @@
 use super::counters::NetworkCounters;
 use super::error::ClientError;
-use eventdock::IncomingEvent;
+use eventdock_core::IncomingEvent;
 use flume::Sender;
 use futures_util::StreamExt;
 use std::sync::Arc;

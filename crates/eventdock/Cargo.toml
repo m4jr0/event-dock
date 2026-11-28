@@ -3,9 +3,6 @@ name = "eventdock"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-storage-validation = []
-
 [dependencies]
 eventdock-core = { version = "0.1.0", path = "../eventdock-core" }
 serde = { version = "1.0.229", features = ["derive"] }

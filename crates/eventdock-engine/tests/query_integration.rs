@@ -1,4 +1,5 @@
-use eventdock::{CompactEventStore, IncomingEvent, IncomingEventRef, LogLevel};
+use eventdock_core::{IncomingEvent, IncomingEventRef, LogLevel};
+use eventdock_engine::CompactEventStore;
 use eventdock_engine::{EventQuery, execute_query};
 
 fn populated_store(

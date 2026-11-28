@@ -1347,7 +1347,7 @@ name = "eventdock-engine"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
- "eventdock",
+ "eventdock-core",
  "flume",
  "futures-util",
  "serde",

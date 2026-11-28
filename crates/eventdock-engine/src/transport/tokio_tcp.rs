@@ -1,7 +1,7 @@
 use super::{
     client::read_client, counters::NetworkCounters, error::ClientError,
 };
-use eventdock::IncomingEvent;
+use eventdock_core::IncomingEvent;
 use flume::Sender;
 use std::{io, sync::Arc};
 use tokio::{

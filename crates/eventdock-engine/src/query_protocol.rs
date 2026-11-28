@@ -1,6 +1,6 @@
 //! Typed, newline-delimited JSON query protocol shared by clients and the server.
 use crate::{Backend, EventQuery, EventQueryResult};
-use eventdock::{EventId, LogLevel};
+use eventdock_core::{EventId, LogLevel};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},

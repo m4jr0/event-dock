@@ -1,4 +1,5 @@
-use eventdock::{CompactEventStore, EventId, LogLevel};
+use crate::CompactEventStore;
+use eventdock_core::{EventId, LogLevel};
 use serde::{Deserialize, Serialize};
 
 /// A bounded page of events, ordered from newest to oldest.
@@ -14,9 +15,9 @@ pub struct EventQuery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueriedEvent {
     pub id: EventId,
-    pub level: eventdock::LogLevel,
-    pub occurred_at: eventdock::Timestamp,
-    pub received_at: eventdock::Timestamp,
+    pub level: eventdock_core::LogLevel,
+    pub occurred_at: eventdock_core::Timestamp,
+    pub received_at: eventdock_core::Timestamp,
     pub source: String,
     pub message: String,
 }

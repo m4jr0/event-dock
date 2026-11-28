@@ -218,7 +218,7 @@ fn bind_listener(config: &BackendConfig) -> io::Result<TcpListener> {
 
 fn spawn_network_worker(
     listener: TcpListener,
-    sender: flume::Sender<eventdock::IncomingEvent>,
+    sender: flume::Sender<eventdock_core::IncomingEvent>,
     stop: oneshot::Receiver<()>,
     counters: Arc<Counters>,
     limits: CollectorLimits,
@@ -239,7 +239,7 @@ fn spawn_network_worker(
 
 fn spawn_storage_worker(
     config: BackendConfig,
-    receiver: flume::Receiver<eventdock::IncomingEvent>,
+    receiver: flume::Receiver<eventdock_core::IncomingEvent>,
     snapshot: Arc<SharedSnapshot>,
     counters: Arc<Counters>,
     queries: flume::Receiver<QueryRequest>,

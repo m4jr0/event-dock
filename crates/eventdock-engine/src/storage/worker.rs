@@ -3,7 +3,8 @@ use crate::{
     query::QueryExecution, shared_snapshot::SharedSnapshot,
     transport::Counters,
 };
-use eventdock::{CompactEventStore, IncomingEvent, IncomingEventRef};
+use crate::CompactEventStore;
+use eventdock_core::{IncomingEvent, IncomingEventRef};
 use flume::{Receiver, RecvTimeoutError};
 use std::{
     sync::Arc,

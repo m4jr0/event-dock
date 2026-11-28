@@ -21,3 +21,11 @@ pub use query_protocol::{
 
 /// Version of this library package.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub use storage::compact::{
+    CompactDecodingError, CompactEncodingError, CompactEventStore,
+    CompactEventView, CompactStoreError, FieldIter, FieldValueView, FieldView,
+};
+pub use storage::{EventStore, StoredEvent, EventStorage, EventSummary, EventViewAccess, StorageError};
+
+use eventdock_core::{EventId, FieldValue, Fields, IncomingEvent, IncomingEventRef, LogLevel, Timestamp};
