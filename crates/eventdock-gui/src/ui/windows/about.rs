@@ -94,7 +94,7 @@ impl AboutWindow {
         let components = [
             ("eventdock-gui", VERSION),
             ("eventdock", eventdock::VERSION),
-            ("eventdock-backend", eventdock_backend::VERSION),
+            ("eventdock-engine", eventdock_engine::VERSION),
         ];
 
         let font_size = crate::ui::theme::current(ui)

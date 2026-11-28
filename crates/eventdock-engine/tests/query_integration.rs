@@ -1,5 +1,5 @@
 use eventdock::{CompactEventStore, IncomingEvent, IncomingEventRef, LogLevel};
-use eventdock_backend::{EventQuery, execute_query};
+use eventdock_engine::{EventQuery, execute_query};
 
 fn populated_store(
     capacity: usize,
@@ -128,7 +128,7 @@ fn empty_store_returns_empty_page() {
 
 #[test]
 fn incremental_execution_matches_page_results() {
-    use eventdock_backend::QueryExecution;
+    use eventdock_engine::QueryExecution;
 
     let store = populated_store(100, 75);
     let query = EventQuery {
@@ -151,7 +151,7 @@ fn incremental_execution_matches_page_results() {
 
 #[test]
 fn incremental_execution_handles_eviction() {
-    use eventdock_backend::QueryExecution;
+    use eventdock_engine::QueryExecution;
 
     let mut store = populated_store(5, 5);
     let query = EventQuery {
@@ -212,7 +212,7 @@ fn filtered_pages_skip_nonmatching_events() {
         [6, 4]
     );
     assert_eq!(first.next_cursor, Some(4));
-    let mut execution = eventdock_backend::QueryExecution::new(query, &store);
+    let mut execution = eventdock_engine::QueryExecution::new(query, &store);
     while !execution.advance(&store, 1) {}
     assert_eq!(execution.finish(&store), first);
     let second = execute_query(

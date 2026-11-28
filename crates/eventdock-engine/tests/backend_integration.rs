@@ -1,4 +1,4 @@
-use eventdock_backend::{Backend, BackendConfig, BackendSnapshot};
+use eventdock_engine::{Backend, BackendConfig, BackendSnapshot};
 use std::{
     io::{self, Write},
     net::{Shutdown, SocketAddr, TcpStream},

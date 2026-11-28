@@ -1,4 +1,4 @@
-use eventdock_backend::{Backend, BackendConfig};
+use eventdock_engine::{Backend, BackendConfig};
 use std::{
     io,
     sync::{

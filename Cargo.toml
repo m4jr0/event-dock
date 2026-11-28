@@ -2,5 +2,5 @@
 resolver = "3"
 members = [
     "crates/eventdock",
-    "crates/eventdock-cli", "crates/eventdock-gui", "crates/eventdock-backend",
+    "crates/eventdock-cli", "crates/eventdock-gui", "crates/eventdock-engine",
 ]

@@ -1,6 +1,6 @@
 use super::AppResult;
 use crate::cli::QueryArgs;
-use eventdock_backend::{QueryRequest, query_remote};
+use eventdock_engine::{QueryRequest, query_remote};
 
 pub fn run(args: QueryArgs) -> AppResult<()> {
     let response = query_remote(

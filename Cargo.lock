@@ -1323,7 +1323,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "eventdock-backend"
+name = "eventdock-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "eventdock",
+ "eventdock-engine",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "eventdock-engine"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
@@ -1337,23 +1348,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "eventdock-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "eventdock",
- "eventdock-backend",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "eventdock-gui"
 version = "0.1.0"
 dependencies = [
  "eframe",
  "eventdock",
- "eventdock-backend",
+ "eventdock-engine",
  "rfd",
  "rust-i18n",
  "serde",

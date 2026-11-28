@@ -3,7 +3,7 @@ use crate::{
     cli::ServeArgs,
     config::{QUERY_QUEUE_CAPACITY, QUERY_WORKERS},
 };
-use eventdock_backend::{Backend, BackendConfig, serve_queries};
+use eventdock_engine::{Backend, BackendConfig, serve_queries};
 use std::{
     io,
     net::{SocketAddr, TcpListener},
