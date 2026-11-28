@@ -1,5 +1,4 @@
 mod binary;
-#[cfg(test)]
 mod payload;
 mod store;
 

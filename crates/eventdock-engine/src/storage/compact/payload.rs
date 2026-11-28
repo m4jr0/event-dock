@@ -10,7 +10,6 @@ pub(super) struct PayloadBuffer {
 
 impl PayloadBuffer {
     pub(super) fn new(capacity: usize) -> Self {
-        assert!(capacity > 0);
         Self {
             bytes: vec![0; capacity],
             head: 0,
@@ -30,7 +29,7 @@ impl PayloadBuffer {
         if self.live_bytes == 0 {
             return Some(0);
         }
-        if self.tail < self.head {
+        if self.tail <= self.head {
             return (len <= self.head - self.tail).then_some(self.tail);
         }
         if len <= self.bytes.len() - self.tail {
@@ -78,6 +77,26 @@ impl PayloadBuffer {
         self.live_bytes = remaining;
     }
 
+    pub(super) fn live_bytes(&self) -> usize {
+        self.live_bytes
+    }
+
+    pub(super) fn capacity(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(super) fn allocated_bytes(&self) -> usize {
+        self.bytes.capacity()
+    }
+
+    #[cfg(test)]
+    pub(super) fn truncate_for_test(
+        &mut self,
+        len: usize,
+    ) {
+        self.bytes.truncate(len);
+    }
+
     // Read a retained record using its owner's metadata.
     pub(super) fn get(
         &self,
@@ -118,6 +137,18 @@ mod tests {
         assert_eq!(ring.get(0, 2), Some(b"xy".as_slice()));
         assert_eq!(ring.push(b""), None);
         assert_eq!(ring.get(usize::MAX, 2), None);
+    }
+
+    #[test]
+    fn padding_does_not_make_equal_head_and_tail_writable() {
+        let mut ring = PayloadBuffer::new(10);
+        assert_eq!(ring.push(b"abcd"), Some(0));
+        assert_eq!(ring.push(b"efgh"), Some(4));
+        ring.release(0, 4, Some(4));
+        assert_eq!(ring.push(b"ijkl"), Some(0));
+        assert_eq!(ring.push(b"x"), None);
+        assert_eq!(ring.get(4, 4), Some(b"efgh".as_slice()));
+        assert_eq!(ring.get(0, 4), Some(b"ijkl".as_slice()));
     }
 
     #[test]

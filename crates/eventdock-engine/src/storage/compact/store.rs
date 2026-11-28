@@ -1,3 +1,4 @@
+use super::payload::PayloadBuffer;
 use super::{
     CompactDecodingError, EventMetadata, FieldIter, PayloadView,
     decode_retained_header, encode_payload,
@@ -14,7 +15,7 @@ pub type CompactStoreError = crate::StorageError;
 #[derive(Debug)]
 pub struct CompactEventStore {
     metadata: VecDeque<EventMetadata>,
-    payloads: Vec<u8>,
+    payloads: PayloadBuffer,
     next_id: EventId,
     max_events: Option<usize>,
     max_payload_bytes: Option<usize>,
@@ -77,7 +78,7 @@ impl CompactEventStore {
     pub fn new() -> Self {
         Self {
             metadata: VecDeque::new(),
-            payloads: Vec::new(),
+            payloads: PayloadBuffer::new(0),
             next_id: 0,
             max_events: None,
             max_payload_bytes: None,
@@ -112,28 +113,18 @@ impl CompactEventStore {
         self.max_payload_bytes
     }
 
-    /// Compact away the dead prefix; offsets are relative to the live payload buffer.
-    fn reclaim_prefix(&mut self) {
-        let first = self
-            .metadata
-            .front()
-            .map_or(self.payloads.len(), |m| m.payload_offset);
-
-        if first == 0 {
-            return;
-        }
-
-        let live = self.payloads.len() - first;
-        self.payloads.copy_within(first.., 0);
-        self.payloads.truncate(live);
-
-        for metadata in &mut self.metadata {
-            metadata.payload_offset -= first;
-        }
-    }
-
     fn evict_oldest(&mut self) {
-        self.metadata.pop_front();
+        let oldest = self
+            .metadata
+            .pop_front()
+            .expect("oldest event");
+        self.payloads.release(
+            oldest.payload_offset,
+            oldest.payload_len,
+            self.metadata
+                .front()
+                .map(|metadata| metadata.payload_offset),
+        );
     }
 
     fn ensure_id_available(&self) -> Result<(), StorageError> {
@@ -192,11 +183,7 @@ impl CompactEventStore {
     }
 
     fn live_payload_bytes(&self) -> usize {
-        let first = self
-            .metadata
-            .front()
-            .map_or(self.payloads.len(), |metadata| metadata.payload_offset);
-        self.payloads.len() - first
+        self.payloads.live_bytes()
     }
 
     fn evict_to_payload_limit(
@@ -212,32 +199,61 @@ impl CompactEventStore {
         }
     }
 
-    fn reclaim_if_needed(
-        &mut self,
-        incoming: usize,
-    ) {
-        let dead = self.payloads.len() - self.live_payload_bytes();
-        let exceeds_limit = self
-            .max_payload_bytes
-            .is_some_and(|limit| {
-                self.payloads
-                    .len()
-                    .saturating_add(incoming)
-                    > limit
-            });
-
-        if exceeds_limit || (dead > 0 && dead >= self.payloads.len() / 2) {
-            self.reclaim_prefix();
-        }
-    }
-
     fn make_room(
         &mut self,
         incoming: usize,
     ) {
         self.evict_to_event_limit();
         self.evict_to_payload_limit(incoming);
-        self.reclaim_if_needed(incoming);
+    }
+
+    fn grow_payloads(
+        &mut self,
+        incoming: usize,
+    ) {
+        let required = self
+            .live_payload_bytes()
+            .checked_add(incoming)
+            .expect("payload capacity overflow");
+        // Allow physical slack for contiguous records without reducing retention.
+        let ceiling = self
+            .max_payload_bytes
+            .map_or(usize::MAX, |limit| limit.saturating_mul(2));
+        let capacity = self
+            .payloads
+            .capacity()
+            .saturating_mul(2)
+            .max(4096)
+            .max(required)
+            .min(ceiling);
+        assert!(
+            capacity > self.payloads.capacity(),
+            "no contiguous payload space"
+        );
+        let mut replacement = PayloadBuffer::new(capacity);
+        for metadata in &mut self.metadata {
+            let bytes = self
+                .payloads
+                .get(metadata.payload_offset, metadata.payload_len)
+                .expect("retained payload");
+            metadata.payload_offset = replacement
+                .push(bytes)
+                .expect("grown payload space");
+        }
+        self.payloads = replacement;
+    }
+
+    fn allocate_payload(
+        &mut self,
+        encoded: &[u8],
+    ) -> usize {
+        if let Some(offset) = self.payloads.push(encoded) {
+            return offset;
+        }
+        self.grow_payloads(encoded.len());
+        self.payloads
+            .push(encoded)
+            .expect("grown payload space")
     }
 
     fn append_event(
@@ -248,8 +264,7 @@ impl CompactEventStore {
         let id = self.next_id;
         self.next_id += 1; // Checked by ensure_id_available before mutation.
 
-        let offset = self.payloads.len();
-        self.payloads.extend_from_slice(encoded);
+        let offset = self.allocate_payload(encoded);
         self.metadata.push_back(EventMetadata {
             id,
             occurred_at: event.timestamp,
@@ -309,8 +324,7 @@ impl CompactEventStore {
             return false;
         }
 
-        let mut previous_end = 0;
-
+        let mut ranges = Vec::new();
         for metadata in &self.metadata {
             let Some(end) = metadata
                 .payload_offset
@@ -318,14 +332,26 @@ impl CompactEventStore {
             else {
                 return false;
             };
-
-            if metadata.payload_offset < previous_end
-                || end > self.payloads.len()
-            {
+            if end > self.payloads.capacity() {
                 return false;
             }
-
-            previous_end = end;
+            ranges.push((metadata.payload_offset, end));
+        }
+        ranges.sort_unstable();
+        if ranges
+            .windows(2)
+            .any(|pair| pair[0].1 > pair[1].0)
+        {
+            return false;
+        }
+        if self
+            .metadata
+            .iter()
+            .map(|metadata| metadata.payload_len)
+            .sum::<usize>()
+            != self.live_payload_bytes()
+        {
+            return false;
         }
 
         true
@@ -364,14 +390,9 @@ impl CompactEventStore {
         &'a self,
         metadata: &'a EventMetadata,
     ) -> Result<CompactEventView<'a>, CompactDecodingError> {
-        let end = metadata
-            .payload_offset
-            .checked_add(metadata.payload_len)
-            .ok_or(CompactDecodingError::UnexpectedEnd)?;
-
         let bytes = self
             .payloads
-            .get(metadata.payload_offset..end)
+            .get(metadata.payload_offset, metadata.payload_len)
             .ok_or(CompactDecodingError::UnexpectedEnd)?;
 
         #[cfg(feature = "storage-validation")]
@@ -412,12 +433,13 @@ impl CompactEventStore {
         self.metadata.is_empty()
     }
 
+    /// Return retained encoded bytes, excluding unused ring space.
     pub fn payload_bytes(&self) -> usize {
-        self.payloads.len()
+        self.live_payload_bytes()
     }
 
     pub fn allocated_bytes(&self) -> usize {
-        self.payloads.capacity()
+        self.payloads.allocated_bytes()
             + self.metadata.capacity() * std::mem::size_of::<EventMetadata>()
             + self.encoding_scratch.capacity()
     }
@@ -587,6 +609,51 @@ mod tests {
     }
 
     #[test]
+    fn variable_payload_retention_matches_logical_budget() {
+        use std::collections::VecDeque;
+        let mut store = CompactEventStore::with_limits(31, 1024);
+        let mut expected = VecDeque::new();
+        let mut live = 0;
+        let mut state = 12345_u32;
+        for id in 0..10000 {
+            state = state
+                .wrapping_mul(1664525)
+                .wrapping_add(1013904223);
+            let message = format!("{id}:{}", "x".repeat(state as usize % 800));
+            let input = event(&message);
+            let mut encoded = Vec::new();
+            encode_payload(
+                &mut encoded,
+                &input.source,
+                &input.message,
+                &input.fields,
+            )
+            .unwrap();
+            let len = encoded.len();
+            while expected.len() >= 31 || live + len > 1024 {
+                let (_, _, old_len) = expected.pop_front().unwrap();
+                live -= old_len;
+            }
+            assert_eq!(
+                store
+                    .push(IncomingEventRef::from(&input))
+                    .unwrap(),
+                id
+            );
+            expected.push_back((id, message, len));
+            live += len;
+            assert_eq!(store.len(), expected.len());
+            assert_eq!(store.payload_bytes(), live);
+            assert!(store.retention_invariants_hold());
+            for (view, (expected_id, message, _)) in store.iter().zip(&expected)
+            {
+                assert_eq!(view.id(), *expected_id);
+                assert_eq!(view.message(), message.as_str());
+            }
+        }
+    }
+
+    #[test]
     fn new_store_is_empty() {
         let store = CompactEventStore::new();
         assert!(store.is_empty());
@@ -748,7 +815,11 @@ mod tests {
             .push(IncomingEventRef::from(&input))
             .unwrap();
 
-        store.payloads.pop();
+        let end =
+            store.metadata[0].payload_offset + store.metadata[0].payload_len;
+        store
+            .payloads
+            .truncate_for_test(end - 1);
 
         assert_eq!(
             store.view(&store.metadata[0]).err(),
@@ -765,7 +836,11 @@ mod tests {
             .push(IncomingEventRef::from(&input))
             .unwrap();
 
-        store.payloads.pop();
+        let end =
+            store.metadata[0].payload_offset + store.metadata[0].payload_len;
+        store
+            .payloads
+            .truncate_for_test(end - 1);
         store.metadata[0].payload_len -= 1;
 
         let view = store.view(&store.metadata[0]).unwrap();
