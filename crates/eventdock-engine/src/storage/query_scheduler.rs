@@ -5,17 +5,20 @@ pub(super) struct QueryScheduler {
     requests: Receiver<QueryRequest>,
     active: Option<(QueryRequest, QueryExecution)>,
     scan_budget: usize,
+    max_text_bytes: usize,
 }
 
 impl QueryScheduler {
     pub(super) fn new(
         requests: Receiver<QueryRequest>,
         scan_budget: usize,
+        max_text_bytes: usize,
     ) -> Self {
         Self {
             requests,
             active: None,
             scan_budget,
+            max_text_bytes,
         }
     }
 
@@ -46,7 +49,11 @@ impl QueryScheduler {
     ) {
         debug_assert!(self.active.is_none());
         if !request.reply.is_disconnected() {
-            let execution = QueryExecution::new(request.query, store);
+            let execution = QueryExecution::with_text_limit(
+                request.query,
+                store,
+                self.max_text_bytes,
+            );
             self.active = Some((request, execution));
         }
     }

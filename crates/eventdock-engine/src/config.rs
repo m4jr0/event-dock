@@ -11,6 +11,8 @@ pub struct BackendConfig {
     pub ingestion_byte_capacity: usize,
     pub query_queue_capacity: usize,
     pub max_query_events: usize,
+    /// Target maximum source and message bytes per query page.
+    pub max_query_text_bytes: usize,
     pub query_scan_budget: usize,
     pub max_event_bytes: usize,
     pub max_connections: usize,
@@ -28,6 +30,7 @@ impl Default for BackendConfig {
             ingestion_byte_capacity: 32 * 1024 * 1024,
             query_queue_capacity: 64,
             max_query_events: 512,
+            max_query_text_bytes: 512 * 1024,
             query_scan_budget: 256,
             max_event_bytes: 1024 * 1024,
             max_connections: 64,
@@ -44,6 +47,7 @@ impl BackendConfig {
             || self.queue_capacity == 0
             || self.query_queue_capacity == 0
             || self.max_query_events == 0
+            || self.max_query_text_bytes == 0
             || self.query_scan_budget == 0
             || self.max_event_bytes == 0
             || self.max_connections == 0

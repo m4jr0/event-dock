@@ -56,6 +56,8 @@ pub struct QueryExecution {
     events: Vec<QueriedEvent>,
     finished: bool,
     has_more: bool,
+    text_bytes: usize,
+    max_text_bytes: usize,
 }
 
 impl QueryExecution {
@@ -63,6 +65,16 @@ impl QueryExecution {
         query: EventQuery,
         store: &CompactEventStore,
     ) -> Self {
+        Self::with_text_limit(query, store, usize::MAX)
+    }
+
+    /// Bound copied text per page while allowing one event to ensure cursor progress.
+    pub fn with_text_limit(
+        query: EventQuery,
+        store: &CompactEventStore,
+        max_text_bytes: usize,
+    ) -> Self {
+        assert!(max_text_bytes > 0);
         let newest = store
             .iter_metadata()
             .next_back()
@@ -80,6 +92,8 @@ impl QueryExecution {
             next_id,
             events: Vec::new(),
             has_more: false,
+            text_bytes: 0,
+            max_text_bytes,
             finished: query.limit == 0
                 || next_id.is_none()
                 || query.before_id == Some(0),
@@ -134,6 +148,21 @@ impl QueryExecution {
                 break;
             }
             if let Some(view) = store.get(id) {
+                let bytes = view
+                    .source()
+                    .len()
+                    .saturating_add(view.message().len());
+                if !self.events.is_empty()
+                    && bytes
+                        > self
+                            .max_text_bytes
+                            .saturating_sub(self.text_bytes)
+                {
+                    self.has_more = true;
+                    self.finished = true;
+                    break;
+                }
+                self.text_bytes = self.text_bytes.saturating_add(bytes);
                 self.events.push(QueriedEvent {
                     id: summary.id,
                     level: summary.level,
@@ -167,5 +196,47 @@ impl QueryExecution {
             events: self.events,
             next_cursor,
         }
+    }
+}
+
+#[cfg(test)]
+mod text_limit_tests {
+    use super::*;
+    use eventdock_core::{IncomingEvent, IncomingEventRef, LogLevel};
+
+    #[test]
+    fn text_limit_preserves_pagination_and_large_event_progress() {
+        let mut store = CompactEventStore::new();
+        for message in ["abc", "def", "long message", "ghi"] {
+            let event = IncomingEvent::new("s", LogLevel::Info, message);
+            store
+                .push(IncomingEventRef::from(&event))
+                .unwrap();
+        }
+        let mut before_id = None;
+        let mut ids = Vec::new();
+        let mut sizes = Vec::new();
+        loop {
+            let mut execution = QueryExecution::with_text_limit(
+                EventQuery {
+                    before_id,
+                    limit: 10,
+                    level: None,
+                },
+                &store,
+                8,
+            );
+            while !execution.advance(&store, 1) {}
+            let page = execution.finish(&store);
+            sizes.push(page.events.len());
+            ids.extend(page.events.iter().map(|event| event.id));
+            before_id = page.next_cursor;
+            if before_id.is_none() {
+                break;
+            }
+            assert!(ids.len() < 4);
+        }
+        assert_eq!(ids, [3, 2, 1, 0]);
+        assert_eq!(sizes, [1, 1, 2]);
     }
 }

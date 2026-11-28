@@ -165,7 +165,11 @@ impl StoreTask {
                 counters,
                 config.snapshot_interval,
             ),
-            queries: QueryScheduler::new(queries, config.query_scan_budget),
+            queries: QueryScheduler::new(
+                queries,
+                config.query_scan_budget,
+                config.max_query_text_bytes,
+            ),
         }
     }
 
