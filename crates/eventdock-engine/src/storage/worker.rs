@@ -21,7 +21,7 @@ pub(crate) fn run_storage(
             config.event_capacity,
             config.payload_capacity,
         ),
-        receiver,
+        receiver: Some(receiver),
         snapshots: SnapshotPublisher::new(
             publisher,
             counters,
@@ -39,7 +39,7 @@ enum Wake {
 
 struct StorageWorker {
     store: CompactEventStore,
-    receiver: Receiver<IncomingEvent>,
+    receiver: Option<Receiver<IncomingEvent>>,
     snapshots: SnapshotPublisher,
     queries: QueryScheduler,
 }
@@ -58,25 +58,49 @@ impl StorageWorker {
     }
 
     fn receive_event(&mut self) -> bool {
-        match self.receiver.try_recv() {
-            Ok(event) => self.ingest(&event),
-            Err(TryRecvError::Disconnected) => return false,
-            Err(TryRecvError::Empty) if !self.queries.has_work() => {
-                return self.wait_for_work();
+        if let Some(receiver) = &self.receiver {
+            match receiver.try_recv() {
+                Ok(event) => {
+                    self.ingest(&event);
+                    return true;
+                }
+                Err(TryRecvError::Disconnected) => self.receiver = None,
+                Err(TryRecvError::Empty) => {}
             }
-            Err(TryRecvError::Empty) => {}
         }
+
+        if self.receiver.is_none()
+            && self
+                .queries
+                .requests()
+                .is_disconnected()
+        {
+            return false;
+        }
+        if self.queries.has_work() {
+            return true;
+        }
+        self.wait_for_work();
         true
     }
 
-    fn wait_for_work(&mut self) -> bool {
-        let selector = Selector::new().recv(&self.receiver, Wake::Event);
+    fn wait_for_work(&mut self) {
+        let selector = Selector::new();
+        let selector = if let Some(receiver) = &self.receiver {
+            selector.recv(receiver, Wake::Event)
+        } else {
+            selector
+        };
         // Do not select a closed query channel: it would wake continuously.
         let selector = if self
             .queries
             .requests()
             .is_disconnected()
         {
+            // Avoid waiting on an empty selector during shutdown.
+            if self.receiver.is_none() {
+                return;
+            }
             selector
         } else {
             selector.recv(self.queries.requests(), Wake::Query)
@@ -85,14 +109,13 @@ impl StorageWorker {
 
         match wake {
             Ok(Wake::Event(Ok(event))) => self.ingest(&event),
-            Ok(Wake::Event(Err(_))) => return false,
+            Ok(Wake::Event(Err(_))) => self.receiver = None,
             Ok(Wake::Query(Ok(request))) => {
                 self.queries
                     .accept_request(request, &self.store);
             }
             Ok(Wake::Query(Err(_))) | Err(_) => {}
         }
-        true
     }
 
     fn ingest(

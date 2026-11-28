@@ -264,3 +264,33 @@ fn classifies_oversized_frames() {
     let snapshot = backend.shutdown().unwrap();
     assert_eq!(snapshot.network.oversized_frames, 1);
 }
+
+#[test]
+fn stopped_ingestion_preserves_history() {
+    let mut backend = Backend::start(config()).unwrap();
+    let mut stream = connect(&backend);
+    stream.write_all(EVENT).unwrap();
+    wait_until(&backend, |s| s.stored_total == 1);
+
+    backend.stop_ingestion().unwrap();
+    backend.stop_ingestion().unwrap();
+    assert!(!backend.is_ingesting());
+    assert!(backend.is_running());
+
+    let page = backend
+        .query(eventdock_engine::EventQuery {
+            before_id: None,
+            limit: 1,
+            level: None,
+        })
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].message, "bar");
+    assert_eq!(
+        backend
+            .shutdown()
+            .unwrap()
+            .retained_events,
+        1
+    );
+}

@@ -54,7 +54,7 @@ pub struct Backend {
     network: Option<JoinHandle<io::Result<()>>>,
     storage: Option<JoinHandle<()>>,
     snapshot: Arc<SharedSnapshot>,
-    query_sender: flume::Sender<QueryRequest>,
+    query_sender: Option<flume::Sender<QueryRequest>>,
     max_query_events: usize,
 }
 
@@ -105,7 +105,7 @@ impl Backend {
 
         Ok(Self {
             address,
-            query_sender,
+            query_sender: Some(query_sender),
             max_query_events,
             stop: Some(stop),
             network: Some(network),
@@ -134,6 +134,8 @@ impl Backend {
         let request = QueryRequest { query, reply };
 
         self.query_sender
+            .as_ref()
+            .ok_or_else(storage_stopped)?
             .try_send(request)
             .map_err(|error| match error {
                 flume::TrySendError::Full(_) => io::Error::new(
@@ -164,25 +166,36 @@ impl Backend {
     }
 
     pub fn is_running(&self) -> bool {
+        self.storage
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+    }
+
+    /// Stop the ingestion source without destroying retained events.
+    /// Events already admitted to the queue continue to be processed.
+    pub fn stop_ingestion(&mut self) -> io::Result<()> {
+        self.request_stop();
+        if let Some(network) = self.network.take() {
+            network
+                .join()
+                .map_err(|_| io::Error::other("network worker panicked"))??;
+        }
+        Ok(())
+    }
+
+    /// Report whether the ingestion worker is still running.
+    pub fn is_ingesting(&self) -> bool {
         self.network
             .as_ref()
             .is_some_and(|worker| !worker.is_finished())
-            && self
-                .storage
-                .as_ref()
-                .is_some_and(|worker| !worker.is_finished())
     }
 
     /// Stops intake, drains the accepted queue, and joins both threads.
     /// Events still waiting in client sockets or to enter the queue can be lost.
     pub fn shutdown(mut self) -> io::Result<BackendSnapshot> {
-        self.request_stop();
-
-        let network = self
-            .network
-            .take()
-            .expect("network handle")
-            .join();
+        let network = self.stop_ingestion();
+        // Close the query channel to terminate retained storage after intake drains.
+        self.query_sender.take();
 
         let storage = self
             .storage
@@ -191,7 +204,7 @@ impl Backend {
             .join();
 
         storage.map_err(|_| io::Error::other("storage worker panicked"))?;
-        network.map_err(|_| io::Error::other("network worker panicked"))??;
+        network?;
 
         Ok(self.snapshot())
     }
