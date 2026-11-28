@@ -1,5 +1,6 @@
 mod backend;
 mod config;
+mod ingestion;
 mod query;
 pub mod query_protocol;
 mod resource_budget;

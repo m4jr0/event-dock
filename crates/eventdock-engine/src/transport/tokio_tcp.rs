@@ -1,7 +1,6 @@
 use super::{
     client::read_client, counters::NetworkCounters, error::ClientError,
 };
-use eventdock_core::IncomingEvent;
 use flume::Sender;
 use std::{io, sync::Arc};
 use tokio::{
@@ -10,15 +9,16 @@ use tokio::{
     task::{JoinError, JoinSet},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct CollectorLimits {
     pub max_connections: usize,
     pub max_event_bytes: usize,
+    pub budget: crate::ByteBudget,
 }
 
 pub(crate) async fn collect(
     listener: TcpListener,
-    sender: Sender<IncomingEvent>,
+    sender: Sender<crate::ingestion::AdmittedEvent>,
     mut stop: oneshot::Receiver<()>,
     counters: Arc<NetworkCounters>,
     limits: CollectorLimits,
@@ -41,7 +41,7 @@ pub(crate) async fn collect(
 
 async fn run_accept_loop(
     listener: &TcpListener,
-    sender: &Sender<IncomingEvent>,
+    sender: &Sender<crate::ingestion::AdmittedEvent>,
     stop: &mut oneshot::Receiver<()>,
     clients: &mut JoinSet<Result<(), ClientError>>,
     counters: &Arc<NetworkCounters>,
@@ -59,7 +59,7 @@ async fn run_accept_loop(
 
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
-                accept_client(stream, sender, clients, counters, limits);
+                accept_client(stream, sender, clients, counters, &limits);
             }
         }
     }
@@ -67,10 +67,10 @@ async fn run_accept_loop(
 
 fn accept_client(
     stream: TcpStream,
-    sender: &Sender<IncomingEvent>,
+    sender: &Sender<crate::ingestion::AdmittedEvent>,
     clients: &mut JoinSet<Result<(), ClientError>>,
     counters: &Arc<NetworkCounters>,
-    limits: CollectorLimits,
+    limits: &CollectorLimits,
 ) {
     // len() includes completed tasks not yet reaped. Reap opportunistically before admission.
     while let Some(result) = clients.try_join_next() {
@@ -89,6 +89,7 @@ fn accept_client(
         sender.clone(),
         Arc::clone(counters),
         limits.max_event_bytes,
+        limits.budget.clone(),
     ));
 }
 

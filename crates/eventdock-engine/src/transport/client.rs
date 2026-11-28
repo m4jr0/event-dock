@@ -1,6 +1,5 @@
 use super::counters::NetworkCounters;
 use super::error::ClientError;
-use eventdock_core::IncomingEvent;
 use flume::Sender;
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -9,9 +8,10 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 
 pub(crate) async fn read_client(
     stream: TcpStream,
-    sender: Sender<IncomingEvent>,
+    sender: Sender<crate::ingestion::AdmittedEvent>,
     counters: Arc<NetworkCounters>,
     max_event_bytes: usize,
+    budget: crate::ByteBudget,
 ) -> Result<(), ClientError> {
     let mut lines = FramedRead::new(
         stream,
@@ -19,8 +19,13 @@ pub(crate) async fn read_client(
     );
 
     while let Some(line) = lines.next().await {
-        handle_line(line.map_err(ClientError::from)?, &sender, &counters)
-            .await?;
+        handle_line(
+            line.map_err(ClientError::from)?,
+            &sender,
+            &counters,
+            &budget,
+        )
+        .await?;
     }
 
     Ok(())
@@ -28,13 +33,18 @@ pub(crate) async fn read_client(
 
 async fn handle_line(
     line: String,
-    sender: &Sender<IncomingEvent>,
+    sender: &Sender<crate::ingestion::AdmittedEvent>,
     counters: &NetworkCounters,
+    budget: &crate::ByteBudget,
 ) -> Result<(), ClientError> {
     if line.trim().is_empty() {
         return Ok(());
     }
 
+    let reservation = budget
+        .reserve(line.len())
+        .await
+        .ok_or(ClientError::FrameTooLarge)?;
     let event = match serde_json::from_str(&line) {
         Ok(event) => event,
 
@@ -45,8 +55,9 @@ async fn handle_line(
         }
     };
 
+    drop(line);
     sender
-        .send_async(event)
+        .send_async(crate::ingestion::AdmittedEvent::new(event, reservation))
         .await
         .map_err(|_| ClientError::QueueClosed)
 }

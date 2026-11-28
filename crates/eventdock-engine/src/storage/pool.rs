@@ -3,7 +3,6 @@ use crate::{
     BackendConfig, backend::QueryRequest, shared_snapshot::SharedSnapshot,
     transport::Counters,
 };
-use eventdock_core::IncomingEvent;
 use std::{
     io,
     sync::Arc,
@@ -48,7 +47,7 @@ impl StoragePool {
     pub(crate) fn register(
         &mut self,
         config: BackendConfig,
-        receiver: flume::Receiver<IncomingEvent>,
+        receiver: flume::Receiver<crate::ingestion::AdmittedEvent>,
         snapshot: Arc<SharedSnapshot>,
         counters: Arc<Counters>,
         queries: flume::Receiver<QueryRequest>,
@@ -106,7 +105,7 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(5);
 
     struct TestStore {
-        events: flume::Sender<IncomingEvent>,
+        events: flume::Sender<crate::ingestion::AdmittedEvent>,
         queries: flume::Sender<QueryRequest>,
         snapshot: Arc<SharedSnapshot>,
     }
@@ -141,7 +140,13 @@ mod tests {
         ) {
             self.events
                 .send_timeout(
-                    IncomingEvent::new("test", LogLevel::Info, message),
+                    crate::ingestion::AdmittedEvent::for_test(
+                        eventdock_core::IncomingEvent::new(
+                            "test",
+                            LogLevel::Info,
+                            message,
+                        ),
+                    ),
                     TIMEOUT,
                 )
                 .unwrap();

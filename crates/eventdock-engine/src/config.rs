@@ -7,6 +7,8 @@ pub struct BackendConfig {
     pub event_capacity: usize,
     pub payload_capacity: usize,
     pub queue_capacity: usize,
+    /// Limit admitted ingestion by original JSON frame bytes.
+    pub ingestion_byte_capacity: usize,
     pub query_queue_capacity: usize,
     pub max_query_events: usize,
     pub query_scan_budget: usize,
@@ -23,6 +25,7 @@ impl Default for BackendConfig {
             event_capacity: 100_000,
             payload_capacity: 64 * 1024 * 1024,
             queue_capacity: 4096,
+            ingestion_byte_capacity: 32 * 1024 * 1024,
             query_queue_capacity: 64,
             max_query_events: 512,
             query_scan_budget: 256,
@@ -52,6 +55,14 @@ impl BackendConfig {
             ));
         }
 
+        if self.ingestion_byte_capacity < self.max_event_bytes
+            || self.ingestion_byte_capacity > crate::ByteBudget::MAX_CAPACITY
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ingestion byte capacity must cover one maximum frame and fit the byte budget",
+            ));
+        }
         Ok(())
     }
 }

@@ -97,6 +97,8 @@ impl Backend {
         let limits = CollectorLimits {
             max_connections: config.max_connections,
             max_event_bytes: config.max_event_bytes,
+            budget: crate::ByteBudget::new(config.ingestion_byte_capacity)
+                .expect("validated ingestion budget"),
         };
 
         let network_runtime = NetworkRuntime::new()?;

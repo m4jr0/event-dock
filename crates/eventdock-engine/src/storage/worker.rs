@@ -5,13 +5,13 @@ use crate::{
     BackendConfig, CompactEventStore, backend::QueryRequest,
     shared_snapshot::SharedSnapshot, transport::Counters,
 };
-use eventdock_core::{IncomingEvent, IncomingEventRef};
+use eventdock_core::IncomingEventRef;
 use flume::{Receiver, Selector, TryRecvError};
 use std::sync::Arc;
 
 pub(super) fn create_store(
     config: BackendConfig,
-    receiver: Receiver<IncomingEvent>,
+    receiver: Receiver<crate::ingestion::AdmittedEvent>,
     publisher: Arc<SharedSnapshot>,
     counters: Arc<Counters>,
     queries: Receiver<QueryRequest>,
@@ -21,7 +21,10 @@ pub(super) fn create_store(
 
 enum Wake {
     Registration(Result<Box<StoreTask>, flume::RecvError>),
-    Event(usize, Result<IncomingEvent, flume::RecvError>),
+    Event(
+        usize,
+        Result<crate::ingestion::AdmittedEvent, flume::RecvError>,
+    ),
     Query(usize, Result<QueryRequest, flume::RecvError>),
 }
 
@@ -137,7 +140,7 @@ impl StorageWorker {
 pub(super) struct StoreTask {
     store: CompactEventStore,
     ingestion_capacity: usize,
-    receiver: Option<Receiver<IncomingEvent>>,
+    receiver: Option<Receiver<crate::ingestion::AdmittedEvent>>,
     snapshots: SnapshotPublisher,
     queries: QueryScheduler,
 }
@@ -145,7 +148,7 @@ pub(super) struct StoreTask {
 impl StoreTask {
     fn new(
         config: BackendConfig,
-        receiver: Receiver<IncomingEvent>,
+        receiver: Receiver<crate::ingestion::AdmittedEvent>,
         publisher: Arc<SharedSnapshot>,
         counters: Arc<Counters>,
         queries: Receiver<QueryRequest>,
@@ -234,11 +237,11 @@ impl StoreTask {
 
     fn ingest(
         &mut self,
-        event: &IncomingEvent,
+        event: &crate::ingestion::AdmittedEvent,
     ) {
         let accepted = self
             .store
-            .push(IncomingEventRef::from(event))
+            .push(IncomingEventRef::from(&event.event))
             .is_ok();
         self.snapshots
             .record_ingestion(accepted);
@@ -266,10 +269,12 @@ mod tests {
             requests,
         );
         sender
-            .try_send(IncomingEvent::new(
-                "test",
-                eventdock_core::LogLevel::Info,
-                "message",
+            .try_send(crate::ingestion::AdmittedEvent::for_test(
+                eventdock_core::IncomingEvent::new(
+                    "test",
+                    eventdock_core::LogLevel::Info,
+                    "message",
+                ),
             ))
             .unwrap();
         let usage = store.pending_work_usage();

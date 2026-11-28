@@ -1,5 +1,4 @@
 use super::{CollectorLimits, Counters, tokio_tcp::collect};
-use eventdock_core::IncomingEvent;
 use std::{
     io,
     net::TcpListener,
@@ -38,7 +37,7 @@ impl NetworkRuntime {
     pub(crate) fn spawn_collector(
         &self,
         listener: TcpListener,
-        sender: flume::Sender<IncomingEvent>,
+        sender: flume::Sender<crate::ingestion::AdmittedEvent>,
         counters: Arc<Counters>,
         limits: CollectorLimits,
     ) -> CollectorTask {
