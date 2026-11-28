@@ -16,105 +16,152 @@ pub(crate) fn run_storage(
     counters: Arc<Counters>,
     queries: Receiver<QueryRequest>,
 ) {
-    let mut worker = StorageWorker {
-        store: CompactEventStore::with_limits(
-            config.event_capacity,
-            config.payload_capacity,
-        ),
-        receiver: Some(receiver),
-        snapshots: SnapshotPublisher::new(
-            publisher,
-            counters,
-            config.snapshot_interval,
-        ),
-        queries: QueryScheduler::new(queries, config.query_scan_budget),
-    };
-    worker.run();
+    let task = StoreTask::new(config, receiver, publisher, counters, queries);
+    StorageWorker { stores: vec![task] }.run();
 }
 
 enum Wake {
-    Event(Result<IncomingEvent, flume::RecvError>),
-    Query(Result<QueryRequest, flume::RecvError>),
+    Event(usize, Result<IncomingEvent, flume::RecvError>),
+    Query(usize, Result<QueryRequest, flume::RecvError>),
 }
 
 struct StorageWorker {
+    stores: Vec<StoreTask>,
+}
+
+impl StorageWorker {
+    fn run(&mut self) {
+        while !self.stores.is_empty() {
+            let worked = self.advance_stores();
+            if !worked && !self.stores.is_empty() {
+                self.wait_for_work();
+            }
+        }
+    }
+
+    fn advance_stores(&mut self) -> bool {
+        let mut worked = false;
+        self.stores.retain_mut(|store| {
+            worked |= store.advance();
+            if store.is_closed() {
+                store
+                    .snapshots
+                    .publish(store.store.len());
+                false
+            } else {
+                true
+            }
+        });
+        worked
+    }
+
+    fn wait_for_work(&mut self) {
+        let mut selector = Selector::new();
+        for (index, store) in self.stores.iter().enumerate() {
+            if let Some(receiver) = &store.receiver {
+                selector = selector
+                    .recv(receiver, move |result| Wake::Event(index, result));
+            }
+            // Register even a newly closed query channel so closure cannot be missed.
+            if !store
+                .queries
+                .requests()
+                .is_disconnected()
+            {
+                selector = selector
+                    .recv(store.queries.requests(), move |result| {
+                        Wake::Query(index, result)
+                    });
+            } else if store.receiver.is_none() {
+                return;
+            }
+        }
+        let wait = self
+            .stores
+            .iter()
+            .map(|store| store.snapshots.time_until_due())
+            .min()
+            .expect("nonempty worker");
+        let wake = selector.wait_timeout(wait);
+        match wake {
+            Ok(Wake::Event(index, Ok(event))) => {
+                self.stores[index].ingest(&event)
+            }
+            Ok(Wake::Event(index, Err(_))) => {
+                self.stores[index].receiver = None
+            }
+            Ok(Wake::Query(index, Ok(request))) => {
+                let store = &mut self.stores[index];
+                store
+                    .queries
+                    .accept_request(request, &store.store);
+            }
+            Ok(Wake::Query(_, Err(_))) | Err(_) => {}
+        }
+    }
+}
+
+struct StoreTask {
     store: CompactEventStore,
     receiver: Option<Receiver<IncomingEvent>>,
     snapshots: SnapshotPublisher,
     queries: QueryScheduler,
 }
 
-impl StorageWorker {
-    fn run(&mut self) {
-        loop {
-            self.queries.advance(&self.store);
-            if !self.receive_event() {
-                break;
-            }
-            self.snapshots
-                .publish_if_due(self.store.len());
+impl StoreTask {
+    fn new(
+        config: BackendConfig,
+        receiver: Receiver<IncomingEvent>,
+        publisher: Arc<SharedSnapshot>,
+        counters: Arc<Counters>,
+        queries: Receiver<QueryRequest>,
+    ) -> Self {
+        Self {
+            store: CompactEventStore::with_limits(
+                config.event_capacity,
+                config.payload_capacity,
+            ),
+            receiver: Some(receiver),
+            snapshots: SnapshotPublisher::new(
+                publisher,
+                counters,
+                config.snapshot_interval,
+            ),
+            queries: QueryScheduler::new(queries, config.query_scan_budget),
         }
-        self.snapshots.publish(self.store.len());
     }
 
-    fn receive_event(&mut self) -> bool {
-        if let Some(receiver) = &self.receiver {
-            match receiver.try_recv() {
-                Ok(event) => {
-                    self.ingest(&event);
-                    return true;
-                }
-                Err(TryRecvError::Disconnected) => self.receiver = None,
-                Err(TryRecvError::Empty) => {}
-            }
-        }
+    fn advance(&mut self) -> bool {
+        let had_query = self.queries.has_work();
+        self.queries.advance(&self.store);
+        let ingested = self.receive_event();
+        self.snapshots
+            .publish_if_due(self.store.len());
+        had_query || ingested || self.queries.has_work()
+    }
 
-        if self.receiver.is_none()
+    fn is_closed(&self) -> bool {
+        self.receiver.is_none()
             && self
                 .queries
                 .requests()
                 .is_disconnected()
-        {
-            return false;
-        }
-        if self.queries.has_work() {
-            return true;
-        }
-        self.wait_for_work();
-        true
     }
 
-    fn wait_for_work(&mut self) {
-        let selector = Selector::new();
-        let selector = if let Some(receiver) = &self.receiver {
-            selector.recv(receiver, Wake::Event)
-        } else {
-            selector
+    fn receive_event(&mut self) -> bool {
+        let Some(receiver) = &self.receiver else {
+            return false;
         };
-        // Do not select a closed query channel: it would wake continuously.
-        let selector = if self
-            .queries
-            .requests()
-            .is_disconnected()
-        {
-            // Avoid waiting on an empty selector during shutdown.
-            if self.receiver.is_none() {
-                return;
+        match receiver.try_recv() {
+            Ok(event) => {
+                self.ingest(&event);
+                true
             }
-            selector
-        } else {
-            selector.recv(self.queries.requests(), Wake::Query)
-        };
-        let wake = selector.wait_timeout(self.snapshots.time_until_due());
-
-        match wake {
-            Ok(Wake::Event(Ok(event))) => self.ingest(&event),
-            Ok(Wake::Event(Err(_))) => self.receiver = None,
-            Ok(Wake::Query(Ok(request))) => {
-                self.queries
-                    .accept_request(request, &self.store);
+            Err(TryRecvError::Disconnected) => {
+                self.receiver = None;
+                false
             }
-            Ok(Wake::Query(Err(_))) | Err(_) => {}
+            Err(TryRecvError::Empty) => false,
         }
     }
 
