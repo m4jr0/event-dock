@@ -20,18 +20,18 @@ pub(super) fn create_store(
 }
 
 enum Wake {
-    Registration(Result<StoreTask, flume::RecvError>),
+    Registration(Result<Box<StoreTask>, flume::RecvError>),
     Event(usize, Result<IncomingEvent, flume::RecvError>),
     Query(usize, Result<QueryRequest, flume::RecvError>),
 }
 
 pub(super) struct StorageWorker {
     stores: Vec<StoreTask>,
-    registrations: Receiver<StoreTask>,
+    registrations: Receiver<Box<StoreTask>>,
 }
 
 impl StorageWorker {
-    pub(super) fn new(registrations: Receiver<StoreTask>) -> Self {
+    pub(super) fn new(registrations: Receiver<Box<StoreTask>>) -> Self {
         Self {
             stores: Vec::new(),
             registrations,
@@ -56,7 +56,7 @@ impl StorageWorker {
 
     fn accept_registration(&mut self) -> bool {
         if let Ok(store) = self.registrations.try_recv() {
-            self.stores.push(store);
+            self.stores.push(*store);
             true
         } else {
             false
@@ -117,7 +117,7 @@ impl StorageWorker {
             None => Some(selector.wait()),
         };
         match wake {
-            Some(Wake::Registration(Ok(store))) => self.stores.push(store),
+            Some(Wake::Registration(Ok(store))) => self.stores.push(*store),
             Some(Wake::Registration(Err(_))) => {}
             Some(Wake::Event(index, Ok(event))) => {
                 self.stores[index].ingest(&event)
@@ -177,6 +177,7 @@ impl StoreTask {
 
     fn is_closed(&self) -> bool {
         self.receiver.is_none()
+            && !self.queries.has_work()
             && self
                 .queries
                 .requests()
