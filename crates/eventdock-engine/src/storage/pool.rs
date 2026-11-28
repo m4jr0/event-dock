@@ -24,6 +24,13 @@ pub(crate) struct StoragePool {
 
 impl StoragePool {
     pub(crate) fn new(count: usize) -> io::Result<Self> {
+        Self::with_worker_factory(count, Self::spawn_worker)
+    }
+
+    fn with_worker_factory(
+        count: usize,
+        mut spawn: impl FnMut(usize) -> io::Result<WorkerSlot>,
+    ) -> io::Result<Self> {
         if count == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -34,17 +41,28 @@ impl StoragePool {
             workers: Vec::new(),
         };
         for index in 0..count {
-            let (registrations, receiver) = flume::bounded(1);
-            let thread = thread::Builder::new()
-                .name(format!("eventdock-storage-{index}"))
-                .spawn(move || StorageWorker::new(receiver).run())?;
-            pool.workers.push(WorkerSlot {
-                registrations,
-                thread,
-                assigned: Arc::new(AtomicUsize::new(0)),
-            });
+            match spawn(index) {
+                Ok(worker) => pool.workers.push(worker),
+                Err(error) => {
+                    // Join previously started workers before returning the startup error.
+                    let _ = pool.shutdown();
+                    return Err(error);
+                }
+            }
         }
         Ok(pool)
+    }
+
+    fn spawn_worker(index: usize) -> io::Result<WorkerSlot> {
+        let (registrations, receiver) = flume::bounded(1);
+        let thread = thread::Builder::new()
+            .name(format!("eventdock-storage-{index}"))
+            .spawn(move || StorageWorker::new(receiver).run())?;
+        Ok(WorkerSlot {
+            registrations,
+            thread,
+            assigned: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     pub(crate) fn register(
@@ -290,6 +308,30 @@ mod tests {
         drop(replacement);
         drop(second);
         shutdown(pool);
+    }
+
+    #[test]
+    fn startup_failure_joins_started_workers() {
+        let exited = Arc::new(AtomicUsize::new(0));
+        let result = StoragePool::with_worker_factory(3, |index| {
+            if index == 2 {
+                return Err(io::Error::other("injected startup failure"));
+            }
+            let (registrations, receiver) = flume::bounded(1);
+            let exited = Arc::clone(&exited);
+            let thread = thread::Builder::new().spawn(move || {
+                StorageWorker::new(receiver).run();
+                exited.fetch_add(1, Ordering::Release);
+            })?;
+            Ok(WorkerSlot {
+                registrations,
+                thread,
+                assigned: Arc::new(AtomicUsize::new(0)),
+            })
+        });
+        let error = result.err().expect("startup must fail");
+        assert_eq!(error.to_string(), "injected startup failure");
+        assert_eq!(exited.load(Ordering::Acquire), 2);
     }
 
     #[test]
