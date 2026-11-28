@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWED = {
     "eventdock-core": set(),
     "eventdock": {"eventdock-core"},
-    "eventdock-engine": {"eventdock-core"},
+    "eventdock-protocol": {"eventdock-core"},
+    "eventdock-engine": {"eventdock-core", "eventdock-protocol"},
     "eventdock-cli": {"eventdock", "eventdock-engine", "eventdock-core"},
     "eventdock-gui": {"eventdock", "eventdock-engine", "eventdock-core"},
 }

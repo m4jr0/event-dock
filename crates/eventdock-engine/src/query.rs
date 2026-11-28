@@ -1,33 +1,6 @@
 use crate::CompactEventStore;
-use eventdock_core::{EventId, LogLevel};
-use serde::{Deserialize, Serialize};
-
-/// A bounded page of events, ordered from newest to oldest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EventQuery {
-    /// Exclusive upper bound. `None` starts at the newest retained event.
-    pub before_id: Option<EventId>,
-    pub limit: usize,
-    /// Optional exact severity match, checked against compact metadata.
-    pub level: Option<LogLevel>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueriedEvent {
-    pub id: EventId,
-    pub level: eventdock_core::LogLevel,
-    pub occurred_at: eventdock_core::Timestamp,
-    pub received_at: eventdock_core::Timestamp,
-    pub source: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EventQueryResult {
-    pub events: Vec<QueriedEvent>,
-    /// Pass this cursor as `before_id` to fetch older retained events.
-    pub next_cursor: Option<EventId>,
-}
+use eventdock_core::EventId;
+use eventdock_protocol::{EventQuery, EventQueryResult, QueriedEvent};
 
 /// Scan borrowed event views and allocate only for the returned page.
 /// A cursor is exclusive; evicted events are never resurrected.

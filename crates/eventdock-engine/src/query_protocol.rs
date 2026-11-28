@@ -1,7 +1,8 @@
 //! Typed, newline-delimited JSON query protocol shared by clients and the server.
-use crate::{Backend, EventQuery, EventQueryResult};
-use eventdock_core::{EventId, LogLevel};
-use serde::{Deserialize, Serialize};
+use crate::{Backend, EventQuery};
+use eventdock_protocol::WireResponse;
+pub use eventdock_protocol::{QueryRequest, QueryResponse};
+use serde::Serialize;
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
@@ -19,55 +20,21 @@ const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct QueryRequest {
-    pub limit: usize,
-    #[serde(default)]
-    pub before_id: Option<EventId>,
-    #[serde(default)]
-    pub level: Option<LogLevel>,
-}
-
-impl QueryRequest {
-    fn validate(
-        self,
-        max_query_events: usize,
-    ) -> io::Result<EventQuery> {
-        if self.limit == 0 || self.limit > max_query_events {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("query limit must be between 1 and {max_query_events}"),
-            ));
-        }
-        Ok(EventQuery {
-            before_id: self.before_id,
-            limit: self.limit,
-            level: self.level,
-        })
+fn validate_request(
+    request: QueryRequest,
+    max_query_events: usize,
+) -> io::Result<EventQuery> {
+    if request.limit == 0 || request.limit > max_query_events {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("query limit must be between 1 and {max_query_events}"),
+        ));
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct QueryResponse {
-    pub events: Vec<crate::QueriedEvent>,
-    pub next_cursor: Option<EventId>,
-}
-
-impl From<EventQueryResult> for QueryResponse {
-    fn from(result: EventQueryResult) -> Self {
-        Self {
-            events: result.events,
-            next_cursor: result.next_cursor,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-enum WireResponse {
-    Success(QueryResponse),
-    Failure { error: String },
+    Ok(EventQuery {
+        before_id: request.before_id,
+        limit: request.limit,
+        level: request.level,
+    })
 }
 
 /// One request and one response per connection. No backend instance is needed by clients.
@@ -141,7 +108,7 @@ fn execute_request(
 ) -> io::Result<QueryResponse> {
     let request: QueryRequest = serde_json::from_slice(bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let query = request.validate(max_query_events)?;
+    let query = validate_request(request, max_query_events)?;
     backend.query(query).map(Into::into)
 }
 
@@ -232,6 +199,7 @@ fn accept_queries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventdock_core::LogLevel;
 
     #[test]
     fn request_round_trip() {
@@ -255,8 +223,7 @@ mod tests {
             level: None,
         };
         assert_eq!(
-            request
-                .validate(512)
+            validate_request(request, 512)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidInput

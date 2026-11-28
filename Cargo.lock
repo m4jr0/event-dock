@@ -1348,6 +1348,7 @@ version = "0.1.0"
 dependencies = [
  "ctrlc",
  "eventdock-core",
+ "eventdock-protocol",
  "flume",
  "futures-util",
  "serde",
@@ -1365,6 +1366,15 @@ dependencies = [
  "eventdock-engine",
  "rfd",
  "rust-i18n",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "eventdock-protocol"
+version = "0.1.0"
+dependencies = [
+ "eventdock-core",
  "serde",
  "serde_json",
 ]

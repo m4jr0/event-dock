@@ -11,9 +11,8 @@ pub use backend::{Backend, PendingQuery};
 pub use config::BackendConfig;
 pub use snapshot::{BackendSnapshot, NetworkSnapshot};
 
-pub use query::{
-    EventQuery, EventQueryResult, QueriedEvent, QueryExecution, execute_query,
-};
+pub use eventdock_protocol::{EventQuery, EventQueryResult, QueriedEvent};
+pub use query::{QueryExecution, execute_query};
 
 pub use query_protocol::{
     QueryRequest, QueryResponse, query_remote, serve_queries,
