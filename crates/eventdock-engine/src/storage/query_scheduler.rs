@@ -27,16 +27,34 @@ impl QueryScheduler {
         self.advance_active(store);
     }
 
+    pub(super) fn has_work(&self) -> bool {
+        self.active.is_some() || !self.requests.is_empty()
+    }
+
+    pub(super) fn requests(&self) -> &Receiver<QueryRequest> {
+        &self.requests
+    }
+
+    pub(super) fn accept_request(
+        &mut self,
+        request: QueryRequest,
+        store: &CompactEventStore,
+    ) {
+        debug_assert!(self.active.is_none());
+        if !request.reply.is_disconnected() {
+            let execution = QueryExecution::new(request.query, store);
+            self.active = Some((request, execution));
+        }
+    }
+
     fn accept_pending(
         &mut self,
         store: &CompactEventStore,
     ) {
         if self.active.is_none()
             && let Ok(request) = self.requests.try_recv()
-            && !request.reply.is_disconnected()
         {
-            let execution = QueryExecution::new(request.query, store);
-            self.active = Some((request, execution));
+            self.accept_request(request, store);
         }
     }
 
