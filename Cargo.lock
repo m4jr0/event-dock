@@ -1335,6 +1335,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventdock-client"
+version = "0.1.0"
+dependencies = [
+ "eventdock-protocol",
+ "flume",
+]
+
+[[package]]
 name = "eventdock-core"
 version = "0.1.0"
 dependencies = [

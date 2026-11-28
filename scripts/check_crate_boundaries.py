@@ -9,9 +9,10 @@ ALLOWED = {
     "eventdock-core": set(),
     "eventdock": {"eventdock-core"},
     "eventdock-protocol": {"eventdock-core"},
+    "eventdock-client": {"eventdock-protocol"},
     "eventdock-engine": {"eventdock-core", "eventdock-protocol"},
-    "eventdock-cli": {"eventdock", "eventdock-engine", "eventdock-core"},
-    "eventdock-gui": {"eventdock", "eventdock-engine", "eventdock-core"},
+    "eventdock-cli": {"eventdock", "eventdock-engine", "eventdock-core", "eventdock-client", "eventdock-protocol"},
+    "eventdock-gui": {"eventdock", "eventdock-engine", "eventdock-core", "eventdock-client", "eventdock-protocol"},
 }
 
 

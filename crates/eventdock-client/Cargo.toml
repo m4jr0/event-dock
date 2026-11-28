@@ -1,0 +1,8 @@
+[package]
+name = "eventdock-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eventdock-protocol = { version = "0.1.0", path = "../eventdock-protocol" }
+flume = { version = "0.11", features = ["async"] }

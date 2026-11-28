@@ -1,10 +1,10 @@
 use crate::{
     BackendConfig, BackendSnapshot,
-    query::{EventQuery, EventQueryResult},
     shared_snapshot::SharedSnapshot,
     storage::StoragePool,
     transport::{CollectorLimits, CollectorTask, Counters, NetworkRuntime},
 };
+use eventdock_protocol::{EventQuery, EventQueryResult};
 use std::{
     io,
     net::{SocketAddr, TcpListener},
