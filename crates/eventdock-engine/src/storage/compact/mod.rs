@@ -1,4 +1,6 @@
 mod binary;
+#[cfg(test)]
+mod payload;
 mod store;
 
 pub use store::{CompactEventStore, CompactEventView, CompactStoreError};
