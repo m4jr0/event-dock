@@ -7,7 +7,10 @@ use crate::{
 };
 use eventdock_core::IncomingEventRef;
 use flume::{Receiver, Selector, TryRecvError};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 pub(super) fn create_store(
     config: BackendConfig,
@@ -137,12 +140,29 @@ impl StorageWorker {
     }
 }
 
+// Count queued registrations and live stores until their ownership ends.
+struct StoreAssignment(Arc<AtomicUsize>);
+
+impl StoreAssignment {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+
+impl Drop for StoreAssignment {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 pub(super) struct StoreTask {
     store: CompactEventStore,
     ingestion_capacity: usize,
     receiver: Option<Receiver<crate::ingestion::AdmittedEvent>>,
     snapshots: SnapshotPublisher,
     queries: QueryScheduler,
+    assignment: Option<StoreAssignment>,
 }
 
 impl StoreTask {
@@ -158,7 +178,10 @@ impl StoreTask {
                 config.event_capacity,
                 config.payload_capacity,
             ),
-            ingestion_capacity: config.queue_capacity,
+            ingestion_capacity: receiver
+                .capacity()
+                .expect("bounded ingestion queue"),
+            assignment: None,
             receiver: Some(receiver),
             snapshots: SnapshotPublisher::new(
                 publisher,
@@ -171,6 +194,14 @@ impl StoreTask {
                 config.max_query_text_bytes,
             ),
         }
+    }
+
+    pub(super) fn assign(
+        &mut self,
+        count: Arc<AtomicUsize>,
+    ) {
+        assert!(self.assignment.is_none(), "store already assigned");
+        self.assignment = Some(StoreAssignment::new(count));
     }
 
     fn advance(&mut self) -> bool {
@@ -255,6 +286,26 @@ impl StoreTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assignment_is_released_when_registration_fails() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let (_events, receiver) = flume::bounded(2);
+        let (_queries, requests) = flume::bounded(3);
+        let mut store = StoreTask::new(
+            BackendConfig::default(),
+            receiver,
+            Arc::new(SharedSnapshot::default()),
+            Arc::new(Counters::default()),
+            requests,
+        );
+        store.assign(Arc::clone(&count));
+        assert_eq!(count.load(Ordering::Acquire), 1);
+        let (sender, receiver) = flume::bounded(1);
+        drop(receiver);
+        assert!(sender.send(Box::new(store)).is_err());
+        assert_eq!(count.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn pending_work_reports_queue_occupancy() {

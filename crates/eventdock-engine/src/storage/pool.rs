@@ -5,14 +5,17 @@ use crate::{
 };
 use std::{
     io,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread::{self, JoinHandle},
 };
 
 struct WorkerSlot {
     registrations: flume::Sender<Box<StoreTask>>,
     thread: JoinHandle<()>,
-    assigned: usize,
+    assigned: Arc<AtomicUsize>,
 }
 
 pub(crate) struct StoragePool {
@@ -38,7 +41,7 @@ impl StoragePool {
             pool.workers.push(WorkerSlot {
                 registrations,
                 thread,
-                assigned: 0,
+                assigned: Arc::new(AtomicUsize::new(0)),
             });
         }
         Ok(pool)
@@ -56,15 +59,15 @@ impl StoragePool {
             .workers
             .iter_mut()
             .filter(|worker| !worker.thread.is_finished())
-            .min_by_key(|worker| worker.assigned)
+            .min_by_key(|worker| worker.assigned.load(Ordering::Acquire))
             .ok_or_else(|| io::Error::other("no storage worker available"))?;
+        let mut store =
+            create_store(config, receiver, snapshot, counters, queries);
+        store.assign(Arc::clone(&worker.assigned));
         worker
             .registrations
-            .send(Box::new(create_store(
-                config, receiver, snapshot, counters, queries,
-            )))
+            .send(Box::new(store))
             .map_err(|_| io::Error::other("storage worker stopped"))?;
-        worker.assigned += 1;
         Ok(())
     }
 
@@ -246,11 +249,46 @@ mod tests {
         assert_eq!(
             pool.workers
                 .iter()
-                .map(|worker| worker.assigned)
+                .map(|worker| worker.assigned.load(Ordering::Acquire))
                 .collect::<Vec<_>>(),
             [3, 2]
         );
         drop(stores);
+        shutdown(pool);
+    }
+
+    #[test]
+    fn registration_reuses_worker_after_store_closes() {
+        let mut pool = StoragePool::new(2).unwrap();
+        let first = TestStore::register(&mut pool);
+        let second = TestStore::register(&mut pool);
+        let third = TestStore::register(&mut pool);
+        drop(first);
+        drop(third);
+        let deadline = Instant::now() + TIMEOUT;
+        while pool.workers[0]
+            .assigned
+            .load(Ordering::Acquire)
+            != 0
+        {
+            assert!(Instant::now() < deadline, "store destruction stalled");
+            thread::sleep(Duration::from_millis(1));
+        }
+        let replacement = TestStore::register(&mut pool);
+        assert_eq!(
+            pool.workers[0]
+                .assigned
+                .load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            pool.workers[1]
+                .assigned
+                .load(Ordering::Acquire),
+            1
+        );
+        drop(replacement);
+        drop(second);
         shutdown(pool);
     }
 
