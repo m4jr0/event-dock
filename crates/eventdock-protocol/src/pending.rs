@@ -90,6 +90,24 @@ impl PendingQuery {
             .result
     }
 
+    /// Wait for a response for at most the specified duration.
+    /// Drop the pending query on timeout to abandon outstanding work.
+    pub fn recv_timeout(
+        self,
+        timeout: std::time::Duration,
+    ) -> io::Result<QueryResponse> {
+        self.response
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                flume::RecvTimeoutError::Timeout => io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "query response timed out",
+                ),
+                flume::RecvTimeoutError::Disconnected => disconnected(),
+            })?
+            .result
+    }
+
     pub async fn recv_async(self) -> io::Result<QueryResponse> {
         self.response
             .recv_async()
@@ -140,6 +158,23 @@ mod tests {
         let (reply, pending) = admission.try_channel().unwrap();
         assert!(reply.complete(Err(io::Error::other("failed"))));
         drop(pending);
+        assert!(admission.try_channel().is_ok());
+    }
+
+    #[test]
+    fn timed_receive_abandons_query() {
+        let admission = QueryAdmission::new(1);
+        let (reply, pending) = admission.try_channel().unwrap();
+        assert_eq!(
+            pending
+                .recv_timeout(std::time::Duration::ZERO)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(reply.is_cancelled());
+        assert!(admission.try_channel().is_err());
+        drop(reply);
         assert!(admission.try_channel().is_ok());
     }
 

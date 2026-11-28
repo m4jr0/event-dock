@@ -119,7 +119,7 @@ impl StoragePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventQuery, EventQueryResult};
+    use crate::EventQuery;
     use eventdock_core::LogLevel;
     use std::time::{Duration, Instant};
 
@@ -184,8 +184,8 @@ mod tests {
             }
         }
 
-        fn submit(&self) -> flume::Receiver<EventQueryResult> {
-            let (reply, response) = flume::bounded(1);
+        fn submit(&self) -> eventdock_protocol::PendingQuery {
+            let (reply, response) = eventdock_protocol::query_reply_channel();
             self.queries
                 .send_timeout(
                     QueryRequest {
@@ -194,7 +194,7 @@ mod tests {
                             limit: 64,
                             level: None,
                         },
-                        reply: crate::backend::Reply::Legacy(reply),
+                        reply,
                     },
                     TIMEOUT,
                 )

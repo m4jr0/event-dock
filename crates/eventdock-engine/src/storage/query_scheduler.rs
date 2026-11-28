@@ -48,7 +48,7 @@ impl QueryScheduler {
         store: &CompactEventStore,
     ) {
         debug_assert!(self.active.is_none());
-        if !request.reply.is_disconnected() {
+        if !request.reply.is_cancelled() {
             let execution = QueryExecution::with_text_limit(
                 request.query,
                 store,
@@ -77,7 +77,7 @@ impl QueryScheduler {
             return;
         };
 
-        if request.reply.is_disconnected() {
+        if request.reply.is_cancelled() {
             self.active = None;
         } else if execution.advance(store, self.scan_budget) {
             self.finish_active(store);
@@ -92,10 +92,10 @@ impl QueryScheduler {
             .active
             .take()
             .expect("active query");
-        if !request.reply.is_disconnected() {
+        if !request.reply.is_cancelled() {
             request
                 .reply
-                .complete(execution.finish(store));
+                .complete(Ok(execution.finish(store).into()));
         }
     }
 }

@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-/// A pending query response. Dropping it cancels an unstarted query.
+/// A pending query response. Drop it to abandon queued or active work.
 pub struct PendingQuery {
     response: eventdock_protocol::PendingQuery,
 }
@@ -45,38 +45,7 @@ fn storage_stopped() -> io::Error {
 
 pub(crate) struct QueryRequest {
     pub query: EventQuery,
-    pub reply: Reply,
-}
-
-pub(crate) enum Reply {
-    #[cfg(test)]
-    Legacy(flume::Sender<EventQueryResult>),
-    Client(eventdock_protocol::QueryReply),
-}
-
-impl Reply {
-    pub(crate) fn is_disconnected(&self) -> bool {
-        match self {
-            #[cfg(test)]
-            Self::Legacy(reply) => reply.is_disconnected(),
-            Self::Client(reply) => reply.is_cancelled(),
-        }
-    }
-
-    pub(crate) fn complete(
-        self,
-        result: EventQueryResult,
-    ) {
-        match self {
-            #[cfg(test)]
-            Self::Legacy(reply) => {
-                let _ = reply.try_send(result);
-            }
-            Self::Client(reply) => {
-                reply.complete(Ok(result.into()));
-            }
-        }
-    }
+    pub reply: eventdock_protocol::QueryReply,
 }
 
 pub struct Backend {
@@ -159,13 +128,12 @@ impl Backend {
     }
 
     /// Submit a query without blocking the calling thread.
-    /// A full request queue returns WouldBlock; callers can retry later.
+    /// Exhausted queue or outstanding-query capacity returns WouldBlock.
     pub fn submit_query(
         &self,
         query: EventQuery,
     ) -> io::Result<PendingQuery> {
-        let (reply, response) = self.query_admission.try_channel()?;
-        self.enqueue_query(query, Reply::Client(reply))?;
+        let response = self.enqueue_query(query)?;
         Ok(PendingQuery { response })
     }
 
@@ -174,23 +142,17 @@ impl Backend {
         &self,
         request: eventdock_protocol::QueryRequest,
     ) -> io::Result<eventdock_protocol::PendingQuery> {
-        let (reply, pending) = self.query_admission.try_channel()?;
-        self.enqueue_query(
-            EventQuery {
-                limit: request.limit,
-                before_id: request.before_id,
-                level: request.level,
-            },
-            Reply::Client(reply),
-        )?;
-        Ok(pending)
+        self.enqueue_query(EventQuery {
+            limit: request.limit,
+            before_id: request.before_id,
+            level: request.level,
+        })
     }
 
     fn enqueue_query(
         &self,
         query: EventQuery,
-        reply: Reply,
-    ) -> io::Result<()> {
+    ) -> io::Result<eventdock_protocol::PendingQuery> {
         if query.limit == 0 || query.limit > self.max_query_events {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -201,6 +163,7 @@ impl Backend {
             ));
         }
 
+        let (reply, pending) = self.query_admission.try_channel()?;
         let request = QueryRequest { query, reply };
 
         self.query_sender
@@ -215,7 +178,7 @@ impl Backend {
                 flume::TrySendError::Disconnected(_) => storage_stopped(),
             })?;
 
-        Ok(())
+        Ok(pending)
     }
 
     /// Submit a query and wait for its result.
