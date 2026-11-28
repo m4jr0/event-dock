@@ -2,6 +2,7 @@ mod backend;
 mod config;
 mod query;
 pub mod query_protocol;
+mod resource_budget;
 mod shared_snapshot;
 mod snapshot;
 mod storage;
@@ -9,6 +10,7 @@ mod transport;
 
 pub use backend::{Backend, PendingQuery};
 pub use config::BackendConfig;
+pub use resource_budget::{ByteBudget, ByteReservation};
 pub use snapshot::{
     BackendSnapshot, NetworkSnapshot, PendingWorkUsage, QueueUsage,
     RetentionStatistics, StorageMemoryUsage,
