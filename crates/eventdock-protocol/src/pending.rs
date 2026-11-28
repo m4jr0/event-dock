@@ -23,7 +23,7 @@ impl QueryAdmission {
 
     pub fn try_channel(&self) -> io::Result<(QueryReply, PendingQuery)> {
         self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 n.checked_sub(1)
             })
             .map_err(|_| {

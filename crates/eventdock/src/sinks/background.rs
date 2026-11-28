@@ -147,7 +147,7 @@ impl ByteBudget {
             .into());
         }
         self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |available| {
                 available.checked_sub(bytes)
             })
             .map_err(|_| {
