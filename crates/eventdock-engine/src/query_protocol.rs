@@ -256,10 +256,9 @@ pub fn serve_queries(
                         max_query_events,
                         &worker_running,
                         deadline,
-                    ) {
-                        if worker_running.load(Ordering::Acquire) {
-                            eprintln!("Query failed: {error}");
-                        }
+                    ) && worker_running.load(Ordering::Acquire)
+                    {
+                        eprintln!("Query failed: {error}");
                     }
                 }
             });
