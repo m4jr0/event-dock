@@ -68,9 +68,7 @@ impl StorageWorker {
         self.stores.retain_mut(|store| {
             worked |= store.advance();
             if store.is_closed() {
-                store
-                    .snapshots
-                    .publish(store.store.len());
+                store.snapshots.publish(&store.store);
                 false
             } else {
                 true
@@ -171,7 +169,7 @@ impl StoreTask {
         self.queries.advance(&self.store);
         let ingested = self.receive_event();
         self.snapshots
-            .publish_if_due(self.store.len());
+            .publish_if_due(&self.store);
         had_query || ingested || self.queries.has_work()
     }
 

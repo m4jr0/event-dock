@@ -10,10 +10,34 @@ pub struct NetworkSnapshot {
     pub task_failures: u64,
 }
 
+/// Container allocations owned by a compact event store, excluding allocator overhead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StorageMemoryUsage {
+    pub live_payload_bytes: usize,
+    pub payload_allocated_bytes: usize,
+    pub live_metadata_bytes: usize,
+    pub metadata_allocated_bytes: usize,
+    pub encoding_scratch_allocated_bytes: usize,
+}
+
+impl StorageMemoryUsage {
+    pub fn allocated_bytes(&self) -> usize {
+        self.payload_allocated_bytes
+            + self.metadata_allocated_bytes
+            + self.encoding_scratch_allocated_bytes
+    }
+
+    pub fn live_bytes(&self) -> usize {
+        self.live_payload_bytes + self.live_metadata_bytes
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackendSnapshot {
     pub stored_total: u64,
     pub rejected_total: u64,
     pub retained_events: usize,
+    /// Storage usage at publication time, before any subsequent destruction.
+    pub storage_memory: StorageMemoryUsage,
     pub network: NetworkSnapshot,
 }

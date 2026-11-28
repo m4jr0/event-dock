@@ -47,19 +47,20 @@ impl SnapshotPublisher {
 
     pub(super) fn publish_if_due(
         &mut self,
-        retained: usize,
+        store: &crate::CompactEventStore,
     ) {
         if Instant::now() >= self.deadline {
-            self.publish(retained);
+            self.publish(store);
             self.deadline = Instant::now() + self.interval;
         }
     }
 
     pub(super) fn publish(
         &mut self,
-        retained: usize,
+        store: &crate::CompactEventStore,
     ) {
-        self.snapshot.retained_events = retained;
+        self.snapshot.retained_events = store.len();
+        self.snapshot.storage_memory = store.memory_usage();
         self.snapshot.network = self.counters.snapshot();
         self.publisher
             .publish(self.snapshot.clone());

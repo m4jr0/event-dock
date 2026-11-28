@@ -438,10 +438,20 @@ impl CompactEventStore {
         self.live_payload_bytes()
     }
 
+    /// Report retained bytes and container allocations without scanning events.
+    pub fn memory_usage(&self) -> crate::StorageMemoryUsage {
+        let metadata_size = std::mem::size_of::<EventMetadata>();
+        crate::StorageMemoryUsage {
+            live_payload_bytes: self.live_payload_bytes(),
+            payload_allocated_bytes: self.payloads.allocated_bytes(),
+            live_metadata_bytes: self.metadata.len() * metadata_size,
+            metadata_allocated_bytes: self.metadata.capacity() * metadata_size,
+            encoding_scratch_allocated_bytes: self.encoding_scratch.capacity(),
+        }
+    }
+
     pub fn allocated_bytes(&self) -> usize {
-        self.payloads.allocated_bytes()
-            + self.metadata.capacity() * std::mem::size_of::<EventMetadata>()
-            + self.encoding_scratch.capacity()
+        self.memory_usage().allocated_bytes()
     }
 }
 
@@ -651,6 +661,41 @@ mod tests {
                 assert_eq!(view.message(), message.as_str());
             }
         }
+    }
+
+    #[test]
+    fn memory_usage_tracks_retained_and_allocated_bytes() {
+        let mut store = CompactEventStore::with_limits(2, 256);
+        assert_eq!(store.memory_usage(), crate::StorageMemoryUsage::default());
+        let input = event("data");
+        for _ in 0..10 {
+            store
+                .push(IncomingEventRef::from(&input))
+                .unwrap();
+            let usage = store.memory_usage();
+            assert_eq!(usage.live_payload_bytes, store.payload_bytes());
+            assert_eq!(
+                usage.live_metadata_bytes,
+                store.len() * std::mem::size_of::<EventMetadata>()
+            );
+            assert!(usage.payload_allocated_bytes >= usage.live_payload_bytes);
+            assert!(
+                usage.metadata_allocated_bytes >= usage.live_metadata_bytes
+            );
+            assert_eq!(usage.allocated_bytes(), store.allocated_bytes());
+            assert!(usage.allocated_bytes() >= usage.live_bytes());
+        }
+        assert_eq!(store.len(), 2);
+        let before = store.memory_usage();
+        let oversized = event(&"x".repeat(1024));
+        assert!(
+            store
+                .push(IncomingEventRef::from(&oversized))
+                .is_err()
+        );
+        let after = store.memory_usage();
+        assert_eq!(before.live_bytes(), after.live_bytes());
+        assert!(after.encoding_scratch_allocated_bytes >= 1024);
     }
 
     #[test]
