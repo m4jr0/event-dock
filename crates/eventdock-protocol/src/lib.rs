@@ -1,6 +1,11 @@
 //! Shared query contracts, independent of engine execution and transport.
+mod framing;
 mod pending;
 use eventdock_core::{EventId, LogLevel};
+pub use framing::{
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, encode_json_line, read_json_line,
+    write_json_line,
+};
 pub use pending::{PendingQuery, QueryReply, query_reply_channel};
 use serde::{Deserialize, Serialize};
 
@@ -60,12 +65,94 @@ impl From<EventQueryResult> for QueryResponse {
 #[serde(untagged)]
 pub enum WireResponse {
     Success(QueryResponse),
-    Failure { error: String },
+    Failure {
+        error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<QueryErrorCode>,
+    },
+}
+
+/// Stable wire error categories. Unknown categories remain readable by older clients.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryErrorCode {
+    InvalidInput,
+    Busy,
+    Unavailable,
+    Timeout,
+    ResponseTooLarge,
+    #[serde(other)]
+    Internal,
+}
+
+impl WireResponse {
+    pub fn failure(error: std::io::Error) -> Self {
+        use std::io::ErrorKind;
+        let code = match error.kind() {
+            ErrorKind::InvalidInput | ErrorKind::InvalidData => {
+                QueryErrorCode::InvalidInput
+            }
+            ErrorKind::WouldBlock => QueryErrorCode::Busy,
+            ErrorKind::BrokenPipe | ErrorKind::ConnectionAborted => {
+                QueryErrorCode::Unavailable
+            }
+            ErrorKind::TimedOut => QueryErrorCode::Timeout,
+            _ => QueryErrorCode::Internal,
+        };
+        Self::Failure {
+            error: error.to_string(),
+            code: Some(code),
+        }
+    }
+
+    pub fn into_result(self) -> std::io::Result<QueryResponse> {
+        use std::io::{Error, ErrorKind};
+        match self {
+            Self::Success(response) => Ok(response),
+            Self::Failure { error, code } => {
+                let kind = match code {
+                    Some(QueryErrorCode::InvalidInput) => {
+                        ErrorKind::InvalidInput
+                    }
+                    Some(QueryErrorCode::Busy) => ErrorKind::WouldBlock,
+                    Some(QueryErrorCode::Unavailable) => ErrorKind::BrokenPipe,
+                    Some(QueryErrorCode::Timeout) => ErrorKind::TimedOut,
+                    Some(QueryErrorCode::ResponseTooLarge) => {
+                        ErrorKind::InvalidData
+                    }
+                    _ => ErrorKind::Other,
+                };
+                Err(Error::new(kind, error))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_errors_preserve_kind() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::InvalidInput,
+            ErrorKind::WouldBlock,
+            ErrorKind::BrokenPipe,
+            ErrorKind::TimedOut,
+        ] {
+            let response = WireResponse::failure(Error::new(kind, "test"));
+            let bytes = serde_json::to_vec(&response).unwrap();
+            let decoded: WireResponse = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                decoded
+                    .into_result()
+                    .unwrap_err()
+                    .kind(),
+                kind
+            );
+        }
+    }
 
     #[test]
     fn legacy_request_defaults() {
@@ -93,6 +180,7 @@ mod tests {
         );
         let failure = WireResponse::Failure {
             error: "busy".into(),
+            code: None,
         };
         assert_eq!(
             serde_json::to_value(failure).unwrap(),

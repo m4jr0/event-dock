@@ -2,9 +2,12 @@ use crate::{
     PendingQuery, QueryReply, QueryRequest, QueryResponse, QueryTransport,
     query_reply_channel,
 };
-use eventdock_protocol::WireResponse;
+use eventdock_protocol::{
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, WireResponse, read_json_line,
+    write_json_line,
+};
 use std::{
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufReader, Read, Write},
     net::{SocketAddr, TcpStream},
     sync::{
         Arc,
@@ -16,7 +19,6 @@ use std::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
-const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 
 struct Job {
     request: QueryRequest,
@@ -222,35 +224,15 @@ fn query(
         job,
         running,
     };
-    serde_json::to_writer(&mut stream, &job.request).map_err(|error| {
-        let kind = error
-            .io_error_kind()
-            .unwrap_or(io::ErrorKind::InvalidData);
-        io::Error::new(kind, error)
-    })?;
-    stream.write_all(b"\n")?;
-    let mut bytes = Vec::new();
-    let count = BufReader::new(stream)
-        .take(MAX_RESPONSE_BYTES + 1)
-        .read_until(b'\n', &mut bytes)?;
-    if count as u64 > MAX_RESPONSE_BYTES || !bytes.ends_with(b"\n") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid query response framing",
-        ));
-    }
-    match serde_json::from_slice::<WireResponse>(&bytes)
-        .map_err(io::Error::other)?
-    {
-        WireResponse::Success(response) => Ok(response),
-        WireResponse::Failure { error } => Err(io::Error::other(error)),
-    }
+    write_json_line(&mut stream, &job.request, MAX_REQUEST_BYTES)?;
+    read_json_line::<WireResponse>(BufReader::new(stream), MAX_RESPONSE_BYTES)?
+        .into_result()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+    use std::{io::BufRead, net::TcpListener};
 
     #[test]
     fn dropping_transport_cancels_active_and_queued_requests() {

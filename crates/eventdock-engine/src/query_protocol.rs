@@ -1,10 +1,12 @@
 //! Typed, newline-delimited JSON query protocol shared by clients and the server.
 use crate::{Backend, EventQuery};
-use eventdock_protocol::WireResponse;
+use eventdock_protocol::{
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, QueryErrorCode, WireResponse,
+    encode_json_line, read_json_line, write_json_line,
+};
 pub use eventdock_protocol::{QueryRequest, QueryResponse};
-use serde::Serialize;
 use std::{
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
@@ -15,8 +17,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAX_REQUEST_BYTES: u64 = 4096;
-const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -45,32 +45,9 @@ pub fn query_remote(
     let mut stream = TcpStream::connect(address)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
-    write_json_line(&mut stream, &request)?;
-
-    let mut bytes = Vec::new();
-    let count = BufReader::new(stream)
-        .take(MAX_RESPONSE_BYTES + 1)
-        .read_until(b'\n', &mut bytes)?;
-    if count as u64 > MAX_RESPONSE_BYTES || !bytes.ends_with(b"\n") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid query response framing",
-        ));
-    }
-    match serde_json::from_slice::<WireResponse>(&bytes)
-        .map_err(io::Error::other)?
-    {
-        WireResponse::Success(response) => Ok(response),
-        WireResponse::Failure { error } => Err(io::Error::other(error)),
-    }
-}
-
-fn write_json_line<T: Serialize>(
-    writer: &mut impl Write,
-    value: &T,
-) -> io::Result<()> {
-    serde_json::to_writer(&mut *writer, value).map_err(io::Error::other)?;
-    writer.write_all(b"\n")
+    write_json_line(&mut stream, &request, MAX_REQUEST_BYTES)?;
+    read_json_line::<WireResponse>(BufReader::new(stream), MAX_RESPONSE_BYTES)?
+        .into_result()
 }
 
 // Check cancellation and the total connection deadline before each I/O operation.
@@ -165,35 +142,36 @@ fn handle_connection(
         running,
         deadline,
     };
-    let mut bytes = Vec::new();
-    let count = BufReader::new(&mut stream)
-        .take(MAX_REQUEST_BYTES + 1)
-        .read_until(b'\n', &mut bytes)?;
-
-    let response =
-        if count as u64 > MAX_REQUEST_BYTES || !bytes.ends_with(b"\n") {
-            WireResponse::Failure {
-                error: "query request exceeds limit or lacks newline".into(),
-            }
-        } else {
-            match execute_request(&bytes, backend, max_query_events, &stream) {
-                Ok(result) => WireResponse::Success(result),
-                Err(error) => WireResponse::Failure {
-                    error: error.to_string(),
-                },
-            }
-        };
-    write_json_line(&mut stream, &response)
+    let request = read_json_line::<QueryRequest>(
+        BufReader::new(&mut stream),
+        MAX_REQUEST_BYTES,
+    );
+    let response = match request.and_then(|request| {
+        execute_request(request, backend, max_query_events, &stream)
+    }) {
+        Ok(result) => WireResponse::Success(result),
+        Err(error) => WireResponse::failure(error),
+    };
+    let bytes = match encode_json_line(&response, MAX_RESPONSE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(_) => encode_json_line(
+            &WireResponse::Failure {
+                error: "query response exceeds wire limit; reduce query limit"
+                    .into(),
+                code: Some(QueryErrorCode::ResponseTooLarge),
+            },
+            MAX_RESPONSE_BYTES,
+        )?,
+    };
+    stream.write_all(&bytes)
 }
 
 fn execute_request(
-    bytes: &[u8],
+    request: QueryRequest,
     backend: &Backend,
     max_query_events: usize,
     connection: &ConnectionIo<'_>,
 ) -> io::Result<QueryResponse> {
-    let request: QueryRequest = serde_json::from_slice(bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let query = validate_request(request, max_query_events)?;
     connection.remaining()?;
     let pending = backend.submit_query(query)?;
@@ -305,7 +283,7 @@ fn accept_queries(
                         // Attempt a best-effort busy response without blocking the acceptor.
                         if stream.set_nonblocking(true).is_ok() {
                             let _ = stream
-                                .write(b"{\"error\":\"query server busy\"}\n");
+                                .write(b"{\"error\":\"query server busy\",\"code\":\"busy\"}\n");
                         }
                     }
                     Err(TrySendError::Disconnected(_)) => {

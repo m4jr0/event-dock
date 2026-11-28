@@ -83,6 +83,7 @@ fn local_and_remote_queries_agree() {
     assert_eq!(actual.events.len(), 1);
     assert_eq!(actual.events[0].message, "hello");
     assert_eq!(local_error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(local_error.kind(), remote_error.kind());
     assert_eq!(local_error.to_string(), remote_error.to_string());
     Arc::try_unwrap(backend)
         .ok()
