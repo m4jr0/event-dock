@@ -23,3 +23,7 @@ eventdock-client = { version = "0.1.0", path = "../eventdock-client" }
 [[bench]]
 name = "storage"
 harness = false
+
+[[bench]]
+name = "end_to_end"
+harness = false
