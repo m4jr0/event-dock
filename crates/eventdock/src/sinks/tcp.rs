@@ -2,7 +2,7 @@ use crate::{EventDockError, IncomingEventRef, LogSink};
 use std::{
     io::{self, BufWriter, Write},
     net::{TcpStream, ToSocketAddrs},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -10,6 +10,7 @@ pub struct TcpSinkConfig {
     buffer_capacity: usize,
     nodelay: bool,
     write_timeout: Option<Duration>,
+    connect_timeout: Duration,
     flush_on_submit: bool,
 }
 
@@ -19,6 +20,7 @@ impl Default for TcpSinkConfig {
             buffer_capacity: 8 * 1024,
             nodelay: true,
             write_timeout: Some(Duration::from_secs(5)),
+            connect_timeout: Duration::from_secs(5),
             flush_on_submit: true,
         }
     }
@@ -36,6 +38,14 @@ impl TcpSinkConfig {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "tcp buffer capacity must be greater than zero",
+            )
+            .into());
+        }
+
+        if self.connect_timeout.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tcp connect timeout must be positive",
             )
             .into());
         }
@@ -69,7 +79,7 @@ impl TcpSinkConfig {
         self
     }
 
-    /// Set the per-write socket timeout. None permits indefinite blocking.
+    /// Set the network I/O allowance per submit or flush. None permits indefinite blocking.
     #[must_use]
     pub fn with_write_timeout(
         mut self,
@@ -77,6 +87,20 @@ impl TcpSinkConfig {
     ) -> Self {
         self.write_timeout = timeout;
         self
+    }
+
+    /// Bound connection attempts after synchronous address resolution.
+    #[must_use]
+    pub fn with_connect_timeout(
+        mut self,
+        timeout: Duration,
+    ) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    pub fn connect_timeout(&self) -> Duration {
+        self.connect_timeout
     }
 
     /// When disabled, callers must explicitly flush buffered output.
@@ -106,10 +130,75 @@ impl TcpSinkConfig {
     }
 }
 
+fn remaining(
+    started: Instant,
+    timeout: Duration,
+) -> io::Result<Duration> {
+    let wait = timeout.saturating_sub(started.elapsed());
+    if wait.is_zero() {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "tcp deadline exceeded",
+        ))
+    } else {
+        Ok(wait)
+    }
+}
+
+fn connect_resolved(
+    address: impl ToSocketAddrs,
+    timeout: Duration,
+) -> io::Result<TcpStream> {
+    let addresses = address.to_socket_addrs()?;
+    let started = Instant::now();
+    let mut last_error =
+        io::Error::new(io::ErrorKind::InvalidInput, "no socket addresses");
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, remaining(started, timeout)?)
+        {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+#[derive(Debug)]
+struct DeadlineWriter {
+    stream: TcpStream,
+    timeout: Option<Duration>,
+    started: Instant,
+}
+
+impl DeadlineWriter {
+    fn begin(&mut self) {
+        self.started = Instant::now();
+    }
+}
+
+impl Write for DeadlineWriter {
+    fn write(
+        &mut self,
+        bytes: &[u8],
+    ) -> io::Result<usize> {
+        let wait = self
+            .timeout
+            .map(|timeout| remaining(self.started, timeout))
+            .transpose()?;
+        self.stream.set_write_timeout(wait)?;
+        self.stream.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 /// Sends newline-delimited JSON events over a persistent TCP connection.
+/// Explicitly flush buffered output before dropping the sink.
 #[derive(Debug)]
 pub struct TcpSink {
-    writer: Option<BufWriter<TcpStream>>,
+    writer: Option<BufWriter<DeadlineWriter>>,
     staging: Vec<u8>,
     state: TcpSinkState,
     flush_on_submit: bool,
@@ -128,14 +217,18 @@ impl TcpSink {
     ) -> Result<Self, EventDockError> {
         config.validate()?;
 
-        let stream = TcpStream::connect(address)?;
+        let stream = connect_resolved(address, config.connect_timeout)?;
         stream.set_nodelay(config.nodelay)?;
         stream.set_write_timeout(config.write_timeout)?;
 
         Ok(Self {
             writer: Some(BufWriter::with_capacity(
                 config.buffer_capacity,
-                stream,
+                DeadlineWriter {
+                    stream,
+                    timeout: config.write_timeout,
+                    started: Instant::now(),
+                },
             )),
             staging: Vec::new(),
             state: TcpSinkState::Connected,
@@ -161,7 +254,19 @@ impl TcpSink {
 
     pub fn flush(&mut self) -> Result<(), EventDockError> {
         self.ensure_connected()?;
+        self.begin_write();
+        self.flush_current()
+    }
 
+    fn begin_write(&mut self) {
+        self.writer
+            .as_mut()
+            .expect("connected writer")
+            .get_mut()
+            .begin();
+    }
+
+    fn flush_current(&mut self) -> Result<(), EventDockError> {
         if let Err(error) = self
             .writer
             .as_mut()
@@ -196,6 +301,15 @@ impl TcpSink {
     }
 }
 
+impl Drop for TcpSink {
+    fn drop(&mut self) {
+        // Avoid implicit network I/O during destruction.
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.into_parts();
+        }
+    }
+}
+
 impl LogSink for TcpSink {
     fn submit(
         &mut self,
@@ -203,6 +317,7 @@ impl LogSink for TcpSink {
     ) -> Result<(), EventDockError> {
         self.ensure_connected()?;
         self.serialize(event)?;
+        self.begin_write();
 
         if let Err(error) = self
             .writer
@@ -215,7 +330,7 @@ impl LogSink for TcpSink {
         }
 
         if self.flush_on_submit {
-            self.flush()
+            self.flush_current()
         } else {
             Ok(())
         }
@@ -502,6 +617,37 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn rejects_zero_connect_timeout() {
+        let config =
+            TcpSinkConfig::default().with_connect_timeout(Duration::ZERO);
+        assert!(
+            matches!(TcpSink::connect_with_config("127.0.0.1:1", config),
+            Err(EventDockError::Io(error)) if error.kind() == io::ErrorKind::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn expired_write_deadline_rejects_output() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream =
+            TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut writer = DeadlineWriter {
+            stream,
+            timeout: Some(Duration::from_millis(1)),
+            started: Instant::now() - Duration::from_secs(1),
+        };
+        assert_eq!(
+            writer
+                .write(b"test")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        writer.begin();
+        assert!(remaining(writer.started, Duration::from_secs(5)).is_ok());
     }
 
     #[test]
