@@ -13,24 +13,29 @@ use std::{
 
 /// A pending query response. Dropping it cancels an unstarted query.
 pub struct PendingQuery {
-    response: flume::Receiver<EventQueryResult>,
+    response: eventdock_protocol::PendingQuery,
 }
 
 impl PendingQuery {
     /// Poll for a completed result without blocking.
     pub fn try_recv(&self) -> io::Result<Option<EventQueryResult>> {
-        match self.response.try_recv() {
-            Ok(result) => Ok(Some(result)),
-            Err(flume::TryRecvError::Empty) => Ok(None),
-            Err(flume::TryRecvError::Disconnected) => Err(storage_stopped()),
-        }
+        self.response
+            .try_recv()
+            .map(|result| result.map(legacy_result))
     }
 
     /// Wait until the query completes or the storage worker stops.
     pub fn recv(self) -> io::Result<EventQueryResult> {
-        self.response
-            .recv()
-            .map_err(|_| storage_stopped())
+        self.response.recv().map(legacy_result)
+    }
+}
+
+fn legacy_result(
+    response: eventdock_protocol::QueryResponse
+) -> EventQueryResult {
+    EventQueryResult {
+        events: response.events,
+        next_cursor: response.next_cursor,
     }
 }
 
@@ -44,6 +49,7 @@ pub(crate) struct QueryRequest {
 }
 
 pub(crate) enum Reply {
+    #[cfg(test)]
     Legacy(flume::Sender<EventQueryResult>),
     Client(eventdock_protocol::QueryReply),
 }
@@ -51,6 +57,7 @@ pub(crate) enum Reply {
 impl Reply {
     pub(crate) fn is_disconnected(&self) -> bool {
         match self {
+            #[cfg(test)]
             Self::Legacy(reply) => reply.is_disconnected(),
             Self::Client(reply) => reply.is_cancelled(),
         }
@@ -61,6 +68,7 @@ impl Reply {
         result: EventQueryResult,
     ) {
         match self {
+            #[cfg(test)]
             Self::Legacy(reply) => {
                 let _ = reply.try_send(result);
             }
@@ -79,6 +87,7 @@ pub struct Backend {
     snapshot: Arc<SharedSnapshot>,
     query_sender: Option<flume::Sender<QueryRequest>>,
     max_query_events: usize,
+    query_admission: eventdock_protocol::QueryAdmission,
     ingestion_budget: crate::ByteBudget,
 }
 
@@ -92,6 +101,9 @@ impl Backend {
         let (query_sender, query_receiver) =
             flume::bounded(config.query_queue_capacity);
         let max_query_events = config.max_query_events;
+        let query_admission = eventdock_protocol::QueryAdmission::new(
+            config.max_outstanding_queries,
+        );
         let counters = Arc::new(Counters::default());
         let snapshot = Arc::new(SharedSnapshot::default());
 
@@ -137,6 +149,7 @@ impl Backend {
             address,
             query_sender: Some(query_sender),
             max_query_events,
+            query_admission,
             ingestion_budget,
             network: Some(network),
             _network_runtime: network_runtime,
@@ -151,8 +164,8 @@ impl Backend {
         &self,
         query: EventQuery,
     ) -> io::Result<PendingQuery> {
-        let (reply, response) = flume::bounded(1);
-        self.enqueue_query(query, Reply::Legacy(reply))?;
+        let (reply, response) = self.query_admission.try_channel()?;
+        self.enqueue_query(query, Reply::Client(reply))?;
         Ok(PendingQuery { response })
     }
 
@@ -161,7 +174,7 @@ impl Backend {
         &self,
         request: eventdock_protocol::QueryRequest,
     ) -> io::Result<eventdock_protocol::PendingQuery> {
-        let (reply, pending) = eventdock_protocol::query_reply_channel();
+        let (reply, pending) = self.query_admission.try_channel()?;
         self.enqueue_query(
             EventQuery {
                 limit: request.limit,

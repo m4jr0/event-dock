@@ -1,10 +1,14 @@
 use crate::{
-    PendingQuery, QueryReply, QueryRequest, QueryResponse, QueryTransport,
-    query_reply_channel,
+    PendingQuery,
+    QueryReply,
+    QueryRequest,
+    QueryResponse,
+    QueryTransport,
+    // Use shared admission for queued and unread remote responses.
 };
 use eventdock_protocol::{
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, WireResponse, read_json_line,
-    write_json_line,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, QueryAdmission, WireResponse,
+    read_json_line, write_json_line,
 };
 use std::{
     io::{self, BufReader, Read, Write},
@@ -29,6 +33,7 @@ struct Job {
 /// Drive remote requests on a bounded background worker.
 pub struct RemoteTransport {
     jobs: Option<flume::Sender<Job>>,
+    admission: QueryAdmission,
     running: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -57,6 +62,7 @@ impl RemoteTransport {
             })?;
         Ok(Self {
             jobs: Some(jobs),
+            admission: QueryAdmission::new(capacity.saturating_add(1)),
             running,
             worker: Some(worker),
         })
@@ -68,7 +74,7 @@ impl QueryTransport for RemoteTransport {
         &self,
         request: QueryRequest,
     ) -> io::Result<PendingQuery> {
-        let (reply, pending) = query_reply_channel();
+        let (reply, pending) = self.admission.try_channel()?;
         self.jobs
             .as_ref()
             .ok_or_else(stopped)?

@@ -8,6 +8,7 @@ pub struct ResourceLimits {
     pub ingestion_frame_bytes: usize,
     pub queued_events: usize,
     pub queued_queries: usize,
+    pub outstanding_queries: usize,
     pub producer_connections: usize,
 }
 
@@ -33,6 +34,9 @@ impl ResourceLimits {
             queued_queries: self
                 .queued_queries
                 .checked_add(other.queued_queries)?,
+            outstanding_queries: self
+                .outstanding_queries
+                .checked_add(other.outstanding_queries)?,
             producer_connections: self
                 .producer_connections
                 .checked_add(other.producer_connections)?,
@@ -49,6 +53,7 @@ impl ResourceLimits {
             && self.ingestion_frame_bytes <= ceiling.ingestion_frame_bytes
             && self.queued_events <= ceiling.queued_events
             && self.queued_queries <= ceiling.queued_queries
+            && self.outstanding_queries <= ceiling.outstanding_queries
             && self.producer_connections <= ceiling.producer_connections
     }
 }

@@ -10,6 +10,8 @@ pub struct BackendConfig {
     /// Limit admitted ingestion by original JSON frame bytes.
     pub ingestion_byte_capacity: usize,
     pub query_queue_capacity: usize,
+    /// Limit queued, active and completed but unread queries together.
+    pub max_outstanding_queries: usize,
     pub max_query_events: usize,
     /// Target maximum source and message bytes per query page.
     pub max_query_text_bytes: usize,
@@ -29,6 +31,7 @@ impl Default for BackendConfig {
             queue_capacity: 4096,
             ingestion_byte_capacity: 32 * 1024 * 1024,
             query_queue_capacity: 64,
+            max_outstanding_queries: 128,
             max_query_events: 512,
             max_query_text_bytes: 512 * 1024,
             query_scan_budget: 256,
@@ -48,6 +51,7 @@ impl BackendConfig {
             ingestion_frame_bytes: self.ingestion_byte_capacity,
             queued_events: self.queue_capacity,
             queued_queries: self.query_queue_capacity,
+            outstanding_queries: self.max_outstanding_queries,
             producer_connections: self.max_connections,
         }
     }
@@ -58,6 +62,7 @@ impl BackendConfig {
             || self.payload_capacity == 0
             || self.queue_capacity == 0
             || self.query_queue_capacity == 0
+            || self.max_outstanding_queries == 0
             || self.max_query_events == 0
             || self.max_query_text_bytes == 0
             || self.query_scan_budget == 0

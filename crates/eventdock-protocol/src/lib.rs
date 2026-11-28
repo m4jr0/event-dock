@@ -14,7 +14,9 @@ pub use framing::{
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, encode_json_line, read_json_line,
     write_json_line,
 };
-pub use pending::{PendingQuery, QueryReply, query_reply_channel};
+pub use pending::{
+    PendingQuery, QueryAdmission, QueryReply, query_reply_channel,
+};
 use serde::{Deserialize, Serialize};
 
 /// A bounded page of events, ordered from newest to oldest.

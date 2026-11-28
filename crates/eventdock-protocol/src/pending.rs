@@ -1,17 +1,72 @@
 use crate::QueryResponse;
-use std::io;
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+/// Bound admitted queries until their results are consumed or discarded.
+#[derive(Debug, Clone)]
+pub struct QueryAdmission {
+    available: Arc<AtomicUsize>,
+}
+
+impl QueryAdmission {
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0);
+        Self {
+            available: Arc::new(AtomicUsize::new(capacity)),
+        }
+    }
+
+    pub fn try_channel(&self) -> io::Result<(QueryReply, PendingQuery)> {
+        self.available
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                n.checked_sub(1)
+            })
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "outstanding query limit reached",
+                )
+            })?;
+        Ok(reply_channel(Some(QueryPermit(Arc::clone(
+            &self.available,
+        )))))
+    }
+}
+
+struct QueryPermit(Arc<AtomicUsize>);
+
+impl Drop for QueryPermit {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Release);
+    }
+}
+
+struct Completion {
+    result: io::Result<QueryResponse>,
+    _permit: Option<QueryPermit>,
+}
 
 pub struct PendingQuery {
-    response: flume::Receiver<io::Result<QueryResponse>>,
+    response: flume::Receiver<Completion>,
 }
 
 pub struct QueryReply {
-    sender: flume::Sender<io::Result<QueryResponse>>,
+    sender: flume::Sender<Completion>,
+    permit: Option<QueryPermit>,
 }
 
 pub fn query_reply_channel() -> (QueryReply, PendingQuery) {
+    reply_channel(None)
+}
+
+fn reply_channel(permit: Option<QueryPermit>) -> (QueryReply, PendingQuery) {
     let (sender, response) = flume::bounded(1);
-    (QueryReply { sender }, PendingQuery { response })
+    (QueryReply { sender, permit }, PendingQuery { response })
 }
 
 fn disconnected() -> io::Error {
@@ -22,7 +77,7 @@ impl PendingQuery {
     /// Poll without blocking. Consume the response at most once.
     pub fn try_recv(&self) -> io::Result<Option<QueryResponse>> {
         match self.response.try_recv() {
-            Ok(result) => result.map(Some),
+            Ok(completion) => completion.result.map(Some),
             Err(flume::TryRecvError::Empty) => Ok(None),
             Err(flume::TryRecvError::Disconnected) => Err(disconnected()),
         }
@@ -32,6 +87,7 @@ impl PendingQuery {
         self.response
             .recv()
             .map_err(|_| disconnected())?
+            .result
     }
 
     pub async fn recv_async(self) -> io::Result<QueryResponse> {
@@ -39,6 +95,7 @@ impl PendingQuery {
             .recv_async()
             .await
             .map_err(|_| disconnected())?
+            .result
     }
 }
 
@@ -52,13 +109,39 @@ impl QueryReply {
         self,
         result: io::Result<QueryResponse>,
     ) -> bool {
-        self.sender.try_send(result).is_ok()
+        self.sender
+            .try_send(Completion {
+                result,
+                _permit: self.permit,
+            })
+            .is_ok()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_tracks_completed_and_abandoned_queries() {
+        let admission = QueryAdmission::new(1);
+        let (reply, pending) = admission.try_channel().unwrap();
+        assert!(admission.try_channel().is_err());
+        assert!(reply.complete(Ok(QueryResponse {
+            events: Vec::new(),
+            next_cursor: None
+        })));
+        assert!(admission.try_channel().is_err());
+        assert!(pending.try_recv().unwrap().is_some());
+        let (reply, pending) = admission.try_channel().unwrap();
+        drop(pending);
+        assert!(admission.try_channel().is_err());
+        assert!(!reply.complete(Err(io::Error::other("cancelled"))));
+        let (reply, pending) = admission.try_channel().unwrap();
+        assert!(reply.complete(Err(io::Error::other("failed"))));
+        drop(pending);
+        assert!(admission.try_channel().is_ok());
+    }
 
     #[test]
     fn pending_response_can_be_polled() {
