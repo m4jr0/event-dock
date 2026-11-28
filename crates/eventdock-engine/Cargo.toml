@@ -16,3 +16,6 @@ tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = "0.3"
 flume = { version = "0.11", features = ["async"] }
 ctrlc = "3.4"
+
+[dev-dependencies]
+eventdock-client = { version = "0.1.0", path = "../eventdock-client" }

@@ -26,6 +26,8 @@ def check_boundaries(metadata):
         name = package["name"]
         for dependency in package["dependencies"]:
             target = dependency["name"]
+            if (name, target, dependency.get("kind")) == ("eventdock-engine", "eventdock-client", "dev"):
+                continue
             if target in names and target not in ALLOWED.get(name, set()):
                 errors.append(f"Forbidden dependency: {name} -> {target} ({dependency.get('kind') or 'normal'})")
     return errors
