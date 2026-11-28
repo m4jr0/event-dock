@@ -1,4 +1,12 @@
 //! Shared query contracts, independent of engine execution and transport.
+//!
+//! The current wire contract uses one newline-delimited JSON request and response
+//! per connection. Frame limits include the newline. Requests reject unknown
+//! fields; responses permit additive fields. Missing error codes and unknown
+//! error categories map to generic I/O errors. Incompatible request changes
+//! require an explicit versioned protocol rather than silent reinterpretation.
+//! Pagination is newest-first with an exclusive cursor, not snapshot isolation:
+//! events evicted between pages may no longer be available.
 mod framing;
 mod pending;
 use eventdock_core::{EventId, LogLevel};
@@ -152,6 +160,38 @@ mod tests {
                 kind
             );
         }
+    }
+
+    #[test]
+    fn legacy_and_future_error_codes_are_readable() {
+        for json in [
+            r#"{"error":"legacy"}"#,
+            r#"{"error":"future","code":"future_category"}"#,
+        ] {
+            let response: WireResponse = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                response
+                    .into_result()
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::Other
+            );
+        }
+    }
+
+    #[test]
+    fn additive_response_fields_are_readable() {
+        let response: WireResponse = serde_json::from_str(
+            r#"{"events":[],"next_cursor":null,"future_field":true}"#,
+        )
+        .unwrap();
+        assert!(
+            response
+                .into_result()
+                .unwrap()
+                .events
+                .is_empty()
+        );
     }
 
     #[test]

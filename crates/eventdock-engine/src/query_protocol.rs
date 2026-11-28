@@ -2,7 +2,7 @@
 use crate::{Backend, EventQuery};
 use eventdock_protocol::{
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, QueryErrorCode, WireResponse,
-    encode_json_line, read_json_line, write_json_line,
+    encode_json_line, read_json_line,
 };
 pub use eventdock_protocol::{QueryRequest, QueryResponse};
 use std::{
@@ -35,19 +35,6 @@ fn validate_request(
         limit: request.limit,
         level: request.level,
     })
-}
-
-/// One request and one response per connection. No backend instance is needed by clients.
-pub fn query_remote(
-    address: &str,
-    request: QueryRequest,
-) -> io::Result<QueryResponse> {
-    let mut stream = TcpStream::connect(address)?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
-    write_json_line(&mut stream, &request, MAX_REQUEST_BYTES)?;
-    read_json_line::<WireResponse>(BufReader::new(stream), MAX_RESPONSE_BYTES)?
-        .into_result()
 }
 
 // Check cancellation and the total connection deadline before each I/O operation.

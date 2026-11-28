@@ -22,9 +22,7 @@ pub use snapshot::{
 pub use eventdock_protocol::{EventQuery, EventQueryResult, QueriedEvent};
 pub use query::{QueryExecution, execute_query};
 
-pub use query_protocol::{
-    QueryRequest, QueryResponse, query_remote, serve_queries,
-};
+pub use query_protocol::{QueryRequest, QueryResponse, serve_queries};
 
 /// Version of this library package.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

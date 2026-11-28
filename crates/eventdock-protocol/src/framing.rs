@@ -1,5 +1,5 @@
 use serde::{Serialize, de::DeserializeOwned};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 
 pub const MAX_REQUEST_BYTES: usize = 4096;
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;

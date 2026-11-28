@@ -1329,6 +1329,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "eventdock",
+ "eventdock-client",
  "eventdock-engine",
  "serde_json",
  "tokio",
