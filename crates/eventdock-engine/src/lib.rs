@@ -9,7 +9,9 @@ mod transport;
 
 pub use backend::{Backend, PendingQuery};
 pub use config::BackendConfig;
-pub use snapshot::{BackendSnapshot, NetworkSnapshot, StorageMemoryUsage};
+pub use snapshot::{
+    BackendSnapshot, NetworkSnapshot, RetentionStatistics, StorageMemoryUsage,
+};
 
 pub use eventdock_protocol::{EventQuery, EventQueryResult, QueriedEvent};
 pub use query::{QueryExecution, execute_query};

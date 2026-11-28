@@ -17,6 +17,7 @@ pub struct CompactEventStore {
     metadata: VecDeque<EventMetadata>,
     payloads: PayloadBuffer,
     next_id: EventId,
+    retention: crate::RetentionStatistics,
     max_events: Option<usize>,
     max_payload_bytes: Option<usize>,
     // Reused across insertions; not part of retained payload storage.
@@ -80,6 +81,7 @@ impl CompactEventStore {
             metadata: VecDeque::new(),
             payloads: PayloadBuffer::new(0),
             next_id: 0,
+            retention: crate::RetentionStatistics::default(),
             max_events: None,
             max_payload_bytes: None,
             encoding_scratch: Vec::new(),
@@ -113,7 +115,7 @@ impl CompactEventStore {
         self.max_payload_bytes
     }
 
-    fn evict_oldest(&mut self) {
+    fn evict_oldest(&mut self) -> usize {
         let oldest = self
             .metadata
             .pop_front()
@@ -125,6 +127,7 @@ impl CompactEventStore {
                 .front()
                 .map(|metadata| metadata.payload_offset),
         );
+        oldest.payload_len
     }
 
     fn ensure_id_available(&self) -> Result<(), StorageError> {
@@ -177,7 +180,9 @@ impl CompactEventStore {
     fn evict_to_event_limit(&mut self) {
         if let Some(limit) = self.max_events {
             while self.metadata.len() >= limit {
-                self.evict_oldest();
+                let bytes = self.evict_oldest();
+                self.retention.event_limit_evictions += 1;
+                self.record_evicted_bytes(bytes);
             }
         }
     }
@@ -194,9 +199,25 @@ impl CompactEventStore {
             while !self.metadata.is_empty()
                 && self.live_payload_bytes() > limit - incoming
             {
-                self.evict_oldest();
+                let bytes = self.evict_oldest();
+                self.retention.payload_limit_evictions += 1;
+                self.record_evicted_bytes(bytes);
             }
         }
+    }
+
+    fn record_evicted_bytes(
+        &mut self,
+        bytes: usize,
+    ) {
+        self.retention.evicted_payload_bytes = self
+            .retention
+            .evicted_payload_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    }
+
+    pub fn retention_statistics(&self) -> crate::RetentionStatistics {
+        self.retention
     }
 
     fn make_room(
@@ -903,6 +924,60 @@ mod tests {
                 matches!(field, Err(CompactDecodingError::UnexpectedEnd))
             }));
         }
+    }
+
+    #[test]
+    fn retention_statistics_classify_evictions() {
+        let input = event("data");
+        let mut probe = CompactEventStore::new();
+        probe
+            .push(IncomingEventRef::from(&input))
+            .unwrap();
+        let bytes = probe.payload_bytes();
+        let mut count = CompactEventStore::with_limits(1, bytes);
+        let mut payload = CompactEventStore::with_limits(2, bytes);
+        for store in [&mut count, &mut payload] {
+            for _ in 0..3 {
+                store
+                    .push(IncomingEventRef::from(&input))
+                    .unwrap();
+            }
+            let stats = store.retention_statistics();
+            assert_eq!(stats.evicted_total(), 2);
+            assert_eq!(stats.evicted_payload_bytes, 2 * bytes as u64);
+            assert_eq!(store.len(), 1);
+            let oversized = event(&"x".repeat(bytes + 1));
+            assert!(
+                store
+                    .push(IncomingEventRef::from(&oversized))
+                    .is_err()
+            );
+            assert_eq!(store.retention_statistics(), stats);
+        }
+        assert_eq!(
+            count
+                .retention_statistics()
+                .event_limit_evictions,
+            2
+        );
+        assert_eq!(
+            count
+                .retention_statistics()
+                .payload_limit_evictions,
+            0
+        );
+        assert_eq!(
+            payload
+                .retention_statistics()
+                .event_limit_evictions,
+            0
+        );
+        assert_eq!(
+            payload
+                .retention_statistics()
+                .payload_limit_evictions,
+            2
+        );
     }
 
     #[test]

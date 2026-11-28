@@ -61,6 +61,7 @@ impl SnapshotPublisher {
     ) {
         self.snapshot.retained_events = store.len();
         self.snapshot.storage_memory = store.memory_usage();
+        self.snapshot.retention = store.retention_statistics();
         self.snapshot.network = self.counters.snapshot();
         self.publisher
             .publish(self.snapshot.clone());

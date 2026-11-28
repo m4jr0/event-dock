@@ -32,6 +32,21 @@ impl StorageMemoryUsage {
     }
 }
 
+/// Cumulative retention evictions, classified by the first enforced limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionStatistics {
+    pub event_limit_evictions: u64,
+    pub payload_limit_evictions: u64,
+    pub evicted_payload_bytes: u64,
+}
+
+impl RetentionStatistics {
+    pub fn evicted_total(&self) -> u64 {
+        self.event_limit_evictions
+            .saturating_add(self.payload_limit_evictions)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackendSnapshot {
     pub stored_total: u64,
@@ -39,5 +54,6 @@ pub struct BackendSnapshot {
     pub retained_events: usize,
     /// Storage usage at publication time, before any subsequent destruction.
     pub storage_memory: StorageMemoryUsage,
+    pub retention: RetentionStatistics,
     pub network: NetworkSnapshot,
 }
