@@ -198,10 +198,12 @@ mod tests {
 
         assert_eq!(fields.len(), 3);
         assert_eq!(fields.get("enabled"), Some(&FieldValue::Bool(true)));
+
         assert_eq!(
             fields.get("name"),
             Some(&FieldValue::String("foo".to_owned()))
         );
+
         assert_eq!(fields.get("missing"), Some(&FieldValue::Null));
     }
 
@@ -221,6 +223,7 @@ mod tests {
             .collect();
 
         assert_eq!(fields.len(), 2);
+
         assert_eq!(
             fields.get("key"),
             Some(&FieldValue::String("bar".to_owned()))

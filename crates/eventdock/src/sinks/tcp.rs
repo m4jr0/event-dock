@@ -67,6 +67,7 @@ impl TcpSinkConfig {
         capacity: usize,
     ) -> Self {
         self.buffer_capacity = capacity;
+
         self
     }
 
@@ -76,6 +77,7 @@ impl TcpSinkConfig {
         enabled: bool,
     ) -> Self {
         self.nodelay = enabled;
+
         self
     }
 
@@ -86,6 +88,7 @@ impl TcpSinkConfig {
         timeout: Option<Duration>,
     ) -> Self {
         self.write_timeout = timeout;
+
         self
     }
 
@@ -96,6 +99,7 @@ impl TcpSinkConfig {
         timeout: Duration,
     ) -> Self {
         self.connect_timeout = timeout;
+
         self
     }
 
@@ -110,6 +114,7 @@ impl TcpSinkConfig {
         enabled: bool,
     ) -> Self {
         self.flush_on_submit = enabled;
+
         self
     }
 
@@ -135,6 +140,7 @@ fn remaining(
     timeout: Duration,
 ) -> io::Result<Duration> {
     let wait = timeout.saturating_sub(started.elapsed());
+
     if wait.is_zero() {
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
@@ -151,8 +157,10 @@ fn connect_resolved(
 ) -> io::Result<TcpStream> {
     let addresses = address.to_socket_addrs()?;
     let started = Instant::now();
+
     let mut last_error =
         io::Error::new(io::ErrorKind::InvalidInput, "no socket addresses");
+
     for address in addresses {
         match TcpStream::connect_timeout(&address, remaining(started, timeout)?)
         {
@@ -160,6 +168,7 @@ fn connect_resolved(
             Err(error) => last_error = error,
         }
     }
+
     Err(last_error)
 }
 
@@ -185,6 +194,7 @@ impl Write for DeadlineWriter {
             .timeout
             .map(|timeout| remaining(self.started, timeout))
             .transpose()?;
+
         self.stream.set_write_timeout(wait)?;
         self.stream.write(bytes)
     }
@@ -406,6 +416,7 @@ mod tests {
 
         let mut sink = TcpSink::connect(address).unwrap();
         let event = make_event("foo");
+
         sink.submit(IncomingEventRef::from(&event))
             .unwrap();
 
@@ -445,6 +456,7 @@ mod tests {
         let mut sink = TcpSink::connect(address).unwrap();
 
         let long_event = make_event(&"x".repeat(1024));
+
         sink.submit(IncomingEventRef::from(&long_event))
             .unwrap();
 
@@ -452,6 +464,7 @@ mod tests {
         assert!(capacity > 0);
 
         let short_event = make_event("bar");
+
         sink.submit(IncomingEventRef::from(&short_event))
             .unwrap();
 
@@ -482,7 +495,6 @@ mod tests {
     #[test]
     fn rejects_zero_buffer_capacity() {
         let config = TcpSinkConfig::default().with_buffer_capacity(0);
-
         let result = TcpSink::connect_with_config("127.0.0.1:1", config);
 
         assert!(matches!(
@@ -521,7 +533,6 @@ mod tests {
     #[test]
     fn starts_connected() {
         let (address, receiver) = start_receiver(0);
-
         let sink = TcpSink::connect(address).unwrap();
         assert_eq!(sink.state(), TcpSinkState::Connected);
 
@@ -558,6 +569,7 @@ mod tests {
         );
 
         let lines = receiver.join().unwrap().unwrap();
+
         let messages: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -566,6 +578,7 @@ mod tests {
                     .message
             })
             .collect();
+
         assert_eq!(messages, ["first", "second"]);
     }
 
@@ -575,6 +588,7 @@ mod tests {
             TcpSinkConfig::default().write_timeout(),
             Some(Duration::from_secs(5))
         );
+
         assert_eq!(
             TcpSinkConfig::default()
                 .with_write_timeout(None)
@@ -587,18 +601,24 @@ mod tests {
     fn failed_sink_discards_buffered_output() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let config = TcpSinkConfig::default().with_flush_on_submit(false);
+
         let mut sink = TcpSink::connect_with_config(
             listener.local_addr().unwrap(),
             config,
         )
         .unwrap();
+
         let (stream, _) = listener.accept().unwrap();
+
         stream
             .set_read_timeout(Some(TEST_TIMEOUT))
             .unwrap();
+
         let event = make_event("discard me");
+
         sink.submit(IncomingEventRef::from(&event))
             .unwrap();
+
         assert!(
             !sink
                 .writer
@@ -607,10 +627,13 @@ mod tests {
                 .buffer()
                 .is_empty()
         );
+
         sink.fail();
         assert_eq!(sink.state(), TcpSinkState::Failed);
         assert!(sink.writer.is_none());
+
         let mut line = String::new();
+
         assert_eq!(
             BufReader::new(stream)
                 .read_line(&mut line)
@@ -623,6 +646,7 @@ mod tests {
     fn rejects_zero_connect_timeout() {
         let config =
             TcpSinkConfig::default().with_connect_timeout(Duration::ZERO);
+
         assert!(
             matches!(TcpSink::connect_with_config("127.0.0.1:1", config),
             Err(EventDockError::Io(error)) if error.kind() == io::ErrorKind::InvalidInput)
@@ -632,13 +656,16 @@ mod tests {
     #[test]
     fn expired_write_deadline_rejects_output() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
         let stream =
             TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+
         let mut writer = DeadlineWriter {
             stream,
             timeout: Some(Duration::from_millis(1)),
             started: Instant::now() - Duration::from_secs(1),
         };
+
         assert_eq!(
             writer
                 .write(b"test")
@@ -646,6 +673,7 @@ mod tests {
                 .kind(),
             io::ErrorKind::TimedOut
         );
+
         writer.begin();
         assert!(remaining(writer.started, Duration::from_secs(5)).is_ok());
     }
@@ -662,8 +690,10 @@ mod tests {
         let mut sink = TcpSink::connect(address).unwrap();
         let first = make_event("foo");
         let second = make_event("bar");
+
         sink.serialize(IncomingEventRef::from(&first))
             .unwrap();
+
         sink.serialize(IncomingEventRef::from(&second))
             .unwrap();
 

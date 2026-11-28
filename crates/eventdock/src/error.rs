@@ -13,6 +13,7 @@ impl fmt::Display for EventDockError {
     ) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "I/O error: {error}"),
+
             Self::Serialization(error) => {
                 write!(f, "serialization error: {error}")
             }

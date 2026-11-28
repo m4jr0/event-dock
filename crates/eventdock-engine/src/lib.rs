@@ -24,7 +24,6 @@ pub use query::{QueryExecution, execute_query};
 
 pub use query_protocol::{QueryRequest, QueryResponse, serve_queries};
 
-/// Version of this library package.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use storage::compact::{

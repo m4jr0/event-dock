@@ -51,10 +51,6 @@ impl IncomingEvent {
 }
 
 /// Borrowed input parameters for submitting an event.
-///
-/// This is not a view into either storage backend. It borrows an event's
-/// source, message, and fields for synchronous submission without cloning.
-/// Use `IncomingEvent` when ownership or deserialization is needed.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct IncomingEventRef<'a> {
     pub timestamp: Timestamp,
@@ -133,6 +129,7 @@ mod tests {
             event.fields.get("foo"),
             Some(&FieldValue::String("baz".to_owned()))
         );
+
         assert_eq!(event.fields.get("bar"), Some(&FieldValue::I64(42)));
     }
 
@@ -200,6 +197,7 @@ mod tests {
             .with_field("flag", true);
 
         let owned_json = serde_json::to_string(&event).unwrap();
+
         let borrowed_json =
             serde_json::to_string(&IncomingEventRef::from(&event)).unwrap();
 

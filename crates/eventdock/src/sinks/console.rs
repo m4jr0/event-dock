@@ -56,6 +56,7 @@ mod tests {
     #[test]
     fn writes_compact_lowercase_labels() {
         let fields = Fields::new();
+
         let event =
             IncomingEventRef::new("foo", LogLevel::Info, "foo", &fields);
 
@@ -87,6 +88,7 @@ mod tests {
     #[test]
     fn does_not_change_message_contents() {
         let fields = Fields::new();
+
         let event =
             IncomingEventRef::new("foo", LogLevel::Debug, "baz", &fields);
 

@@ -16,7 +16,6 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// Ordered severities available to filters and other clients.
     pub const ALL: [Self; 6] = [
         Self::Trace,
         Self::Debug,

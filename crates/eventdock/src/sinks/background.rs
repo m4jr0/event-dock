@@ -13,7 +13,6 @@ use std::{
 #[derive(Debug, Clone, Copy)]
 pub struct BackgroundSinkConfig {
     pub queue_capacity: usize,
-    /// Limit estimated event bytes queued or being submitted downstream.
     pub byte_capacity: usize,
     pub batch_size: usize,
     pub flush_interval: Duration,
@@ -23,7 +22,7 @@ impl Default for BackgroundSinkConfig {
     fn default() -> Self {
         Self {
             queue_capacity: 4096,
-            byte_capacity: 32 * 1024 * 1024,
+            byte_capacity: 32 * 1024 * 1024, // 256 MiB.
             batch_size: 64,
             flush_interval: Duration::from_millis(10),
         }
@@ -37,7 +36,9 @@ enum Command {
 
 /// Moves sink operations to a dedicated worker. Successful submission means
 /// queued, not delivered. A full queue rejects events with WouldBlock.
+///
 /// Call shutdown explicitly to drain the queue and observe worker errors.
+///
 /// Dropping the wrapper closes the queue but detaches the worker. Neither
 /// shutdown nor flush has a total deadline: downstream sinks may block.
 #[derive(Debug)]
@@ -98,6 +99,7 @@ impl<S: LogSink + Send + 'static> BackgroundSink<S> {
     /// A finite downstream per-operation timeout does not bound the entire drain.
     pub fn shutdown(self) -> Result<S, EventDockError> {
         let Self { sender, worker, .. } = self;
+
         drop(sender);
 
         worker
@@ -111,15 +113,18 @@ fn event_bytes(event: IncomingEventRef<'_>) -> usize {
     let mut bytes = std::mem::size_of::<IncomingEvent>()
         .saturating_add(event.source.len())
         .saturating_add(event.message.len());
+
     for (name, value) in event.fields.iter() {
         bytes = bytes
             .saturating_add(std::mem::size_of_val(name))
             .saturating_add(std::mem::size_of_val(value))
             .saturating_add(name.capacity());
+
         if let crate::FieldValue::String(value) = value {
             bytes = bytes.saturating_add(value.capacity());
         }
     }
+
     bytes
 }
 
@@ -134,6 +139,13 @@ struct BytePermit {
     bytes: usize,
 }
 
+impl Drop for BytePermit {
+    fn drop(&mut self) {
+        self.available
+            .fetch_add(self.bytes, Ordering::Release);
+    }
+}
+
 impl ByteBudget {
     fn reserve(
         &self,
@@ -146,6 +158,7 @@ impl ByteBudget {
             )
             .into());
         }
+
         self.available
             .try_update(Ordering::AcqRel, Ordering::Acquire, |available| {
                 available.checked_sub(bytes)
@@ -156,17 +169,11 @@ impl ByteBudget {
                     "background byte capacity exhausted",
                 )
             })?;
+
         Ok(BytePermit {
             available: Arc::clone(&self.available),
             bytes,
         })
-    }
-}
-
-impl Drop for BytePermit {
-    fn drop(&mut self) {
-        self.available
-            .fetch_add(self.bytes, Ordering::Release);
     }
 }
 
@@ -186,6 +193,7 @@ impl<S: LogSink + Send + 'static> LogSink for BackgroundSink<S> {
         let permit = self
             .budget
             .reserve(event_bytes(event))?;
+
         self.enqueue(event.into(), permit)
     }
 
@@ -196,6 +204,7 @@ impl<S: LogSink + Send + 'static> LogSink for BackgroundSink<S> {
         let bytes = event_bytes(IncomingEventRef::from(&event))
             .saturating_add(event.source.capacity() - event.source.len())
             .saturating_add(event.message.capacity() - event.message.len());
+
         let permit = self.budget.reserve(bytes)?;
         self.enqueue(event, permit)
     }
@@ -203,9 +212,11 @@ impl<S: LogSink + Send + 'static> LogSink for BackgroundSink<S> {
     /// FIFO barrier; blocks until preceding events have been flushed.
     fn flush(&mut self) -> Result<(), EventDockError> {
         let (ack_sender, ack_receiver) = mpsc::sync_channel(1);
+
         self.sender
             .send(Command::Flush(ack_sender))
             .map_err(|_| disconnected())?;
+
         ack_receiver
             .recv()
             .map_err(|_| disconnected())
@@ -226,6 +237,7 @@ impl<S> BackgroundSink<S> {
                     "background sink queue is full",
                 )
                 .into(),
+
                 TrySendError::Disconnected(_) => disconnected(),
             })
     }
@@ -339,14 +351,19 @@ mod tests {
             capacity: 10,
             available: Arc::new(AtomicUsize::new(10)),
         };
+
         let permit = budget.reserve(8).unwrap();
+
         assert!(
             matches!(budget.reserve(3), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::WouldBlock)
         );
+
         assert!(
             matches!(budget.reserve(11), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::InvalidInput)
         );
+
         drop(permit);
+
         assert!(budget.reserve(10).is_ok());
     }
 
@@ -356,13 +373,17 @@ mod tests {
             byte_capacity: 1,
             ..BackgroundSinkConfig::default()
         };
+
         let mut sink =
             BackgroundSink::with_config(RecordingSink::default(), config)
                 .unwrap();
+
         let event = IncomingEvent::new("foo", LogLevel::Info, "bar");
+
         assert!(
             matches!(sink.submit(IncomingEventRef::from(&event)), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::InvalidInput)
         );
+
         assert!(
             sink.shutdown()
                 .unwrap()

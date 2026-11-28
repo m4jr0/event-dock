@@ -12,5 +12,4 @@ pub use logger::{LogSink, Logger};
 pub use sinks::{BackgroundSink, BackgroundSinkConfig, ConsoleSink};
 pub use sinks::{TcpSink, TcpSinkConfig, TcpSinkState};
 
-/// Version of this library package.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

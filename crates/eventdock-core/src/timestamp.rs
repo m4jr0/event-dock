@@ -36,6 +36,7 @@ impl Timestamp {
             Ok(duration) => i128::try_from(duration.as_nanos()).ok()?,
             Err(error) => -i128::try_from(error.duration().as_nanos()).ok()?,
         };
+
         Some(Self {
             unix_nanos: i64::try_from(nanos).ok()?,
         })
@@ -71,6 +72,7 @@ mod tests {
                 .as_unix_nanos(),
             123
         );
+
         assert_eq!(
             Timestamp::from_system_time(UNIX_EPOCH - Duration::from_nanos(123))
                 .unwrap()
