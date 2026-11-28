@@ -60,6 +60,49 @@ impl<'a> CompactEventView<'a> {
     }
 }
 
+// Include length prefixes, field count and field tags in the encoded size.
+fn encoded_payload_size(event: IncomingEventRef<'_>) -> usize {
+    let mut bytes = 12usize
+        .saturating_add(event.source.len())
+        .saturating_add(event.message.len());
+    for (name, value) in event.fields.iter() {
+        let value_bytes = match value {
+            crate::FieldValue::Null => 0,
+            crate::FieldValue::Bool(_) => 1,
+            crate::FieldValue::I64(_)
+            | crate::FieldValue::U64(_)
+            | crate::FieldValue::F64(_) => 8,
+            crate::FieldValue::String(value) => {
+                4usize.saturating_add(value.len())
+            }
+        };
+        bytes = bytes
+            .saturating_add(5)
+            .saturating_add(name.len())
+            .saturating_add(value_bytes);
+    }
+    bytes
+}
+
+#[cfg(test)]
+#[test]
+fn oversized_event_does_not_grow_scratch() {
+    let mut store = CompactEventStore::with_limits(10, 128);
+    let event = crate::IncomingEvent::new("foo", LogLevel::Info, "small");
+    store
+        .push(IncomingEventRef::from(&event))
+        .unwrap();
+    let capacity = store.encoding_scratch.capacity();
+    let large =
+        crate::IncomingEvent::new("foo", LogLevel::Info, "x".repeat(4096));
+    assert!(matches!(
+        store.push(IncomingEventRef::from(&large)),
+        Err(StorageError::PayloadTooLarge)
+    ));
+    assert_eq!(store.encoding_scratch.capacity(), capacity);
+    assert_eq!(store.len(), 1);
+}
+
 fn event_summary(metadata: &EventMetadata) -> EventSummary {
     EventSummary {
         id: metadata.id,
@@ -303,6 +346,9 @@ impl CompactEventStore {
         event: IncomingEventRef<'_>,
     ) -> Result<EventId, StorageError> {
         self.ensure_id_available()?;
+        if self.max_payload_bytes.is_some() {
+            self.ensure_payload_fits(encoded_payload_size(event))?;
+        }
         let encoded = self.encode_event(event)?;
         if let Err(error) = self.ensure_payload_fits(encoded.len()) {
             self.recycle_encoding_buffer(encoded);

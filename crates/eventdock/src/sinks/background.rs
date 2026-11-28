@@ -1,7 +1,11 @@
 use crate::{EventDockError, IncomingEvent, IncomingEventRef, LogSink};
 use std::{
     io,
-    sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -9,6 +13,8 @@ use std::{
 #[derive(Debug, Clone, Copy)]
 pub struct BackgroundSinkConfig {
     pub queue_capacity: usize,
+    /// Limit estimated event bytes queued or being submitted downstream.
+    pub byte_capacity: usize,
     pub batch_size: usize,
     pub flush_interval: Duration,
 }
@@ -17,6 +23,7 @@ impl Default for BackgroundSinkConfig {
     fn default() -> Self {
         Self {
             queue_capacity: 4096,
+            byte_capacity: 32 * 1024 * 1024,
             batch_size: 64,
             flush_interval: Duration::from_millis(10),
         }
@@ -24,7 +31,7 @@ impl Default for BackgroundSinkConfig {
 }
 
 enum Command {
-    Event(IncomingEvent),
+    Event(IncomingEvent, BytePermit),
     Flush(SyncSender<()>),
 }
 
@@ -36,6 +43,7 @@ enum Command {
 #[derive(Debug)]
 pub struct BackgroundSink<S> {
     sender: SyncSender<Command>,
+    budget: ByteBudget,
     worker: JoinHandle<Result<S, EventDockError>>,
 }
 
@@ -57,7 +65,8 @@ impl<S: LogSink + Send + 'static> BackgroundSink<S> {
         sink: S,
         config: BackgroundSinkConfig,
     ) -> Result<Self, EventDockError> {
-        if config.queue_capacity == 0
+        if config.byte_capacity == 0
+            || config.queue_capacity == 0
             || config.batch_size == 0
             || config.flush_interval.is_zero()
         {
@@ -74,19 +83,90 @@ impl<S: LogSink + Send + 'static> BackgroundSink<S> {
             .name("eventdock-sink".into())
             .spawn(move || run_worker(sink, receiver, config))?;
 
-        Ok(Self { sender, worker })
+        Ok(Self {
+            sender,
+            budget: ByteBudget {
+                capacity: config.byte_capacity,
+                available: Arc::new(AtomicUsize::new(config.byte_capacity)),
+            },
+            worker,
+        })
     }
 
     /// Drain accepted events, flush, join, and return the downstream sink.
     /// May block indefinitely on downstream I/O. Reports the original worker error.
     /// A finite downstream per-operation timeout does not bound the entire drain.
     pub fn shutdown(self) -> Result<S, EventDockError> {
-        let Self { sender, worker } = self;
+        let Self { sender, worker, .. } = self;
         drop(sender);
 
         worker
             .join()
             .map_err(|_| io::Error::other("background sink worker panicked"))?
+    }
+}
+
+// Account for event data and field entries, not allocator or tree-node overhead.
+fn event_bytes(event: IncomingEventRef<'_>) -> usize {
+    let mut bytes = std::mem::size_of::<IncomingEvent>()
+        .saturating_add(event.source.len())
+        .saturating_add(event.message.len());
+    for (name, value) in event.fields.iter() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of_val(name))
+            .saturating_add(std::mem::size_of_val(value))
+            .saturating_add(name.capacity());
+        if let crate::FieldValue::String(value) = value {
+            bytes = bytes.saturating_add(value.capacity());
+        }
+    }
+    bytes
+}
+
+#[derive(Debug)]
+struct ByteBudget {
+    capacity: usize,
+    available: Arc<AtomicUsize>,
+}
+
+struct BytePermit {
+    available: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+impl ByteBudget {
+    fn reserve(
+        &self,
+        bytes: usize,
+    ) -> Result<BytePermit, EventDockError> {
+        if bytes > self.capacity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "event exceeds background byte capacity",
+            )
+            .into());
+        }
+        self.available
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
+                available.checked_sub(bytes)
+            })
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "background byte capacity exhausted",
+                )
+            })?;
+        Ok(BytePermit {
+            available: Arc::clone(&self.available),
+            bytes,
+        })
+    }
+}
+
+impl Drop for BytePermit {
+    fn drop(&mut self) {
+        self.available
+            .fetch_add(self.bytes, Ordering::Release);
     }
 }
 
@@ -103,15 +183,43 @@ impl<S: LogSink + Send + 'static> LogSink for BackgroundSink<S> {
         &mut self,
         event: IncomingEventRef<'_>,
     ) -> Result<(), EventDockError> {
-        self.submit_owned(event.into())
+        let permit = self
+            .budget
+            .reserve(event_bytes(event))?;
+        self.enqueue(event.into(), permit)
     }
 
     fn submit_owned(
         &mut self,
         event: IncomingEvent,
     ) -> Result<(), EventDockError> {
+        let bytes = event_bytes(IncomingEventRef::from(&event))
+            .saturating_add(event.source.capacity() - event.source.len())
+            .saturating_add(event.message.capacity() - event.message.len());
+        let permit = self.budget.reserve(bytes)?;
+        self.enqueue(event, permit)
+    }
+
+    /// FIFO barrier; blocks until preceding events have been flushed.
+    fn flush(&mut self) -> Result<(), EventDockError> {
+        let (ack_sender, ack_receiver) = mpsc::sync_channel(1);
         self.sender
-            .try_send(Command::Event(event))
+            .send(Command::Flush(ack_sender))
+            .map_err(|_| disconnected())?;
+        ack_receiver
+            .recv()
+            .map_err(|_| disconnected())
+    }
+}
+
+impl<S> BackgroundSink<S> {
+    fn enqueue(
+        &self,
+        event: IncomingEvent,
+        permit: BytePermit,
+    ) -> Result<(), EventDockError> {
+        self.sender
+            .try_send(Command::Event(event, permit))
             .map_err(|error| match error {
                 TrySendError::Full(_) => io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -120,19 +228,6 @@ impl<S: LogSink + Send + 'static> LogSink for BackgroundSink<S> {
                 .into(),
                 TrySendError::Disconnected(_) => disconnected(),
             })
-    }
-
-    /// FIFO barrier; blocks until preceding events have been flushed.
-    fn flush(&mut self) -> Result<(), EventDockError> {
-        let (ack_sender, ack_receiver) = mpsc::sync_channel(1);
-
-        self.sender
-            .send(Command::Flush(ack_sender))
-            .map_err(|_| disconnected())?;
-
-        ack_receiver
-            .recv()
-            .map_err(|_| disconnected())
     }
 }
 
@@ -173,7 +268,7 @@ fn run_worker<S: LogSink>(
         };
 
         match command {
-            Ok(Command::Event(event)) => {
+            Ok(Command::Event(event, _permit)) => {
                 if pending == 0 {
                     started = Instant::now();
                 }
@@ -236,6 +331,44 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn byte_budget_releases_reservations() {
+        let budget = ByteBudget {
+            capacity: 10,
+            available: Arc::new(AtomicUsize::new(10)),
+        };
+        let permit = budget.reserve(8).unwrap();
+        assert!(
+            matches!(budget.reserve(3), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::WouldBlock)
+        );
+        assert!(
+            matches!(budget.reserve(11), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::InvalidInput)
+        );
+        drop(permit);
+        assert!(budget.reserve(10).is_ok());
+    }
+
+    #[test]
+    fn oversized_borrowed_event_is_rejected() {
+        let config = BackgroundSinkConfig {
+            byte_capacity: 1,
+            ..BackgroundSinkConfig::default()
+        };
+        let mut sink =
+            BackgroundSink::with_config(RecordingSink::default(), config)
+                .unwrap();
+        let event = IncomingEvent::new("foo", LogLevel::Info, "bar");
+        assert!(
+            matches!(sink.submit(IncomingEventRef::from(&event)), Err(EventDockError::Io(e)) if e.kind() == io::ErrorKind::InvalidInput)
+        );
+        assert!(
+            sink.shutdown()
+                .unwrap()
+                .events
+                .is_empty()
+        );
     }
 
     #[test]
