@@ -138,8 +138,8 @@ pub(super) fn read_string<'a>(
 ///
 /// # Safety invariant
 /// `write_string_unchecked` copies bytes from a valid `&str` and stores its
-/// length; the store only appends these bytes or copies whole payloads during
-/// prefix reclamation. No API exposes mutable retained payload bytes.
+/// length; the ring stores complete encoded records and copies whole payloads
+/// when growing. Reuse only space that no longer contains retained records. No API exposes mutable retained payload bytes.
 /// If any of those properties change, this function must be revisited.
 #[cfg(not(feature = "storage-validation"))]
 pub(super) fn read_trusted_string<'a>(

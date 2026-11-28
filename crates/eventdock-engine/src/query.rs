@@ -153,10 +153,11 @@ impl QueryExecution {
                     .len()
                     .saturating_add(view.message().len());
                 if !self.events.is_empty()
-                    && bytes
-                        > self
-                            .max_text_bytes
-                            .saturating_sub(self.text_bytes)
+                    && (self.text_bytes > self.max_text_bytes
+                        || bytes
+                            > self
+                                .max_text_bytes
+                                .saturating_sub(self.text_bytes))
                 {
                     self.has_more = true;
                     self.finished = true;

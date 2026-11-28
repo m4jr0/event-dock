@@ -84,20 +84,26 @@ impl StorageWorker {
     }
 
     fn wait_for_work(&mut self) {
+        if let Some(wake) = self.select_work() {
+            self.handle_wake(wake);
+        }
+    }
+
+    fn select_work(&self) -> Option<Wake> {
         let mut selector = Selector::new();
         if !self.registrations.is_disconnected()
             || !self.registrations.is_empty()
         {
             selector = selector.recv(&self.registrations, Wake::Registration);
         } else if self.stores.is_empty() {
-            return;
+            return None;
         }
         for (index, store) in self.stores.iter().enumerate() {
             if let Some(receiver) = &store.receiver {
                 selector = selector
                     .recv(receiver, move |result| Wake::Event(index, result));
             }
-            // Register even a newly closed query channel so closure cannot be missed.
+            // Wait for queries while their channel is connected.
             if !store
                 .queries
                 .requests()
@@ -108,7 +114,7 @@ impl StorageWorker {
                         Wake::Query(index, result)
                     });
             } else if store.receiver.is_none() {
-                return;
+                return None;
             }
         }
         let wait = self
@@ -116,26 +122,28 @@ impl StorageWorker {
             .iter()
             .map(|store| store.snapshots.time_until_due())
             .min();
-        let wake = match wait {
+        match wait {
             Some(wait) => selector.wait_timeout(wait).ok(),
             None => Some(selector.wait()),
-        };
+        }
+    }
+
+    fn handle_wake(
+        &mut self,
+        wake: Wake,
+    ) {
         match wake {
-            Some(Wake::Registration(Ok(store))) => self.stores.push(*store),
-            Some(Wake::Registration(Err(_))) => {}
-            Some(Wake::Event(index, Ok(event))) => {
-                self.stores[index].ingest(&event)
-            }
-            Some(Wake::Event(index, Err(_))) => {
-                self.stores[index].receiver = None
-            }
-            Some(Wake::Query(index, Ok(request))) => {
+            Wake::Registration(Ok(store)) => self.stores.push(*store),
+            Wake::Registration(Err(_)) => {}
+            Wake::Event(index, Ok(event)) => self.stores[index].ingest(&event),
+            Wake::Event(index, Err(_)) => self.stores[index].receiver = None,
+            Wake::Query(index, Ok(request)) => {
                 let store = &mut self.stores[index];
                 store
                     .queries
                     .accept_request(request, &store.store);
             }
-            Some(Wake::Query(_, Err(_))) | None => {}
+            Wake::Query(_, Err(_)) => {}
         }
     }
 }

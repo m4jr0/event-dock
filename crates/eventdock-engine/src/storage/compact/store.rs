@@ -84,25 +84,6 @@ fn encoded_payload_size(event: IncomingEventRef<'_>) -> usize {
     bytes
 }
 
-#[cfg(test)]
-#[test]
-fn oversized_event_does_not_grow_scratch() {
-    let mut store = CompactEventStore::with_limits(10, 128);
-    let event = crate::IncomingEvent::new("foo", LogLevel::Info, "small");
-    store
-        .push(IncomingEventRef::from(&event))
-        .unwrap();
-    let capacity = store.encoding_scratch.capacity();
-    let large =
-        crate::IncomingEvent::new("foo", LogLevel::Info, "x".repeat(4096));
-    assert!(matches!(
-        store.push(IncomingEventRef::from(&large)),
-        Err(StorageError::PayloadTooLarge)
-    ));
-    assert_eq!(store.encoding_scratch.capacity(), capacity);
-    assert_eq!(store.len(), 1);
-}
-
 fn event_summary(metadata: &EventMetadata) -> EventSummary {
     EventSummary {
         id: metadata.id,
@@ -731,6 +712,24 @@ mod tests {
     }
 
     #[test]
+    fn oversized_event_does_not_grow_scratch() {
+        let mut store = CompactEventStore::with_limits(10, 128);
+        let event = crate::IncomingEvent::new("foo", LogLevel::Info, "small");
+        store
+            .push(IncomingEventRef::from(&event))
+            .unwrap();
+        let capacity = store.encoding_scratch.capacity();
+        let large =
+            crate::IncomingEvent::new("foo", LogLevel::Info, "x".repeat(4096));
+        assert!(matches!(
+            store.push(IncomingEventRef::from(&large)),
+            Err(StorageError::PayloadTooLarge)
+        ));
+        assert_eq!(store.encoding_scratch.capacity(), capacity);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
     fn memory_usage_tracks_retained_and_allocated_bytes() {
         let mut store = CompactEventStore::with_limits(2, 256);
         assert_eq!(store.memory_usage(), crate::StorageMemoryUsage::default());
@@ -761,8 +760,7 @@ mod tests {
                 .is_err()
         );
         let after = store.memory_usage();
-        assert_eq!(before.live_bytes(), after.live_bytes());
-        assert!(after.encoding_scratch_allocated_bytes >= 1024);
+        assert_eq!(before, after);
     }
 
     #[test]
