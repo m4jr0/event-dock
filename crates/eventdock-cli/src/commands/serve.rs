@@ -58,11 +58,7 @@ impl Server {
                 query_address,
             }),
             Err(error) => {
-                let cleanup = shutdown_backend(backend);
-                combine(
-                    Err(error),
-                    cleanup.map(|_| unreachable!("startup failed")),
-                )
+                Err(error_with_cleanup(error, shutdown_backend(backend)))
             }
         }
     }
@@ -117,6 +113,20 @@ fn shutdown_backend(backend: Arc<Backend>) -> io::Result<BackendSnapshot> {
         .shutdown()
 }
 
+// Preserve the startup failure even when rollback succeeds.
+fn error_with_cleanup<T>(
+    error: io::Error,
+    cleanup: io::Result<T>,
+) -> io::Error {
+    match cleanup {
+        Ok(_) => error,
+        Err(cleanup) => io::Error::new(
+            error.kind(),
+            format!("{error}; cleanup failed: {cleanup}"),
+        ),
+    }
+}
+
 // Preserve the primary error and report any additional cleanup failure.
 fn combine<T>(
     primary: io::Result<()>,
@@ -124,11 +134,7 @@ fn combine<T>(
 ) -> io::Result<T> {
     match (primary, cleanup) {
         (Ok(()), result) => result,
-        (Err(error), Ok(_)) => Err(error),
-        (Err(error), Err(cleanup)) => Err(io::Error::new(
-            error.kind(),
-            format!("{error}; cleanup failed: {cleanup}"),
-        )),
+        (Err(error), cleanup) => Err(error_with_cleanup(error, cleanup)),
     }
 }
 
@@ -203,6 +209,16 @@ mod tests {
                 .to_string()
                 .contains("query listener")
         );
+    }
+
+    #[test]
+    fn successful_rollback_preserves_startup_error() {
+        let error = error_with_cleanup(
+            io::Error::new(io::ErrorKind::BrokenPipe, "startup failed"),
+            Ok(BackendSnapshot::default()),
+        );
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "startup failed");
     }
 
     #[test]

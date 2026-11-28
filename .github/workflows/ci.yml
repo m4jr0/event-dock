@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup override set stable
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libudev-dev pkg-config
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check crate boundaries
+        run: python3 scripts/check_crate_boundaries.py
+      - name: Test workspace
+        run: cargo test --locked --workspace
+      - name: Validate compact storage
+        run: cargo test --locked -p eventdock-engine --features storage-validation
+      - name: Check lints
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Compile benchmarks
+        run: cargo bench --locked -p eventdock-engine --no-run
