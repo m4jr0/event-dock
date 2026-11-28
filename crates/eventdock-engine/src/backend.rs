@@ -3,7 +3,7 @@ use crate::{
     query::{EventQuery, EventQueryResult},
     shared_snapshot::SharedSnapshot,
     storage::run_storage,
-    transport::{CollectorLimits, Counters, collect},
+    transport::{CollectorLimits, CollectorTask, Counters, NetworkRuntime},
 };
 use std::{
     io,
@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
-use tokio::sync::oneshot;
 
 /// A pending query response. Dropping it cancels an unstarted query.
 pub struct PendingQuery {
@@ -45,13 +44,12 @@ pub(crate) struct QueryRequest {
     pub reply: flume::Sender<EventQueryResult>,
 }
 
-const NETWORK_THREAD_NAME: &str = "eventdock-network";
 const STORAGE_THREAD_NAME: &str = "eventdock-storage";
 
 pub struct Backend {
     address: SocketAddr,
-    stop: Option<oneshot::Sender<()>>,
-    network: Option<JoinHandle<io::Result<()>>>,
+    network: Option<CollectorTask>,
+    _network_runtime: NetworkRuntime,
     storage: Option<JoinHandle<()>>,
     snapshot: Arc<SharedSnapshot>,
     query_sender: Option<flume::Sender<QueryRequest>>,
@@ -68,7 +66,6 @@ impl Backend {
         let (query_sender, query_receiver) =
             flume::bounded(config.query_queue_capacity);
         let max_query_events = config.max_query_events;
-        let (stop, stop_receiver) = oneshot::channel();
         let counters = Arc::new(Counters::default());
         let snapshot = Arc::new(SharedSnapshot::default());
 
@@ -77,13 +74,13 @@ impl Backend {
             max_event_bytes: config.max_event_bytes,
         };
 
-        let network = spawn_network_worker(
+        let network_runtime = NetworkRuntime::new()?;
+        let network = network_runtime.spawn_collector(
             listener,
             sender,
-            stop_receiver,
             Arc::clone(&counters),
             limits,
-        )?;
+        );
 
         let storage_result = spawn_storage_worker(
             config,
@@ -97,8 +94,7 @@ impl Backend {
             Ok(worker) => worker,
 
             Err(error) => {
-                let _ = stop.send(());
-                let _ = network.join();
+                let _ = network.stop();
                 return Err(error);
             }
         };
@@ -107,8 +103,8 @@ impl Backend {
             address,
             query_sender: Some(query_sender),
             max_query_events,
-            stop: Some(stop),
             network: Some(network),
+            _network_runtime: network_runtime,
             storage: Some(storage),
             snapshot,
         })
@@ -174,11 +170,8 @@ impl Backend {
     /// Stop the ingestion source without destroying retained events.
     /// Events already admitted to the queue continue to be processed.
     pub fn stop_ingestion(&mut self) -> io::Result<()> {
-        self.request_stop();
         if let Some(network) = self.network.take() {
-            network
-                .join()
-                .map_err(|_| io::Error::other("network worker panicked"))??;
+            network.stop()?;
         }
         Ok(())
     }
@@ -208,18 +201,6 @@ impl Backend {
 
         Ok(self.snapshot())
     }
-
-    fn request_stop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-    }
-}
-
-impl Drop for Backend {
-    fn drop(&mut self) {
-        self.request_stop();
-    }
 }
 
 fn bind_listener(config: &BackendConfig) -> io::Result<TcpListener> {
@@ -227,27 +208,6 @@ fn bind_listener(config: &BackendConfig) -> io::Result<TcpListener> {
     listener.set_nonblocking(true)?;
 
     Ok(listener)
-}
-
-fn spawn_network_worker(
-    listener: TcpListener,
-    sender: flume::Sender<eventdock_core::IncomingEvent>,
-    stop: oneshot::Receiver<()>,
-    counters: Arc<Counters>,
-    limits: CollectorLimits,
-) -> io::Result<JoinHandle<io::Result<()>>> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    thread::Builder::new()
-        .name(NETWORK_THREAD_NAME.into())
-        .spawn(move || {
-            runtime.block_on(async move {
-                let listener = tokio::net::TcpListener::from_std(listener)?;
-                collect(listener, sender, stop, counters, limits).await
-            })
-        })
 }
 
 fn spawn_storage_worker(
