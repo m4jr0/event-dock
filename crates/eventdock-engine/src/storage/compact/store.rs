@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn view_defers_truncated_field_validation() {
+    fn view_validates_truncated_fields_according_to_mode() {
         let mut store = CompactEventStore::new();
         let input = event("data");
 
@@ -838,17 +838,26 @@ mod tests {
 
         let end =
             store.metadata[0].payload_offset + store.metadata[0].payload_len;
+
         store
             .payloads
             .truncate_for_test(end - 1);
         store.metadata[0].payload_len -= 1;
 
-        let view = store.view(&store.metadata[0]).unwrap();
+        let result = store.view(&store.metadata[0]);
 
-        assert_eq!(view.message(), "data");
-        assert!(view.fields().any(|field| {
-            matches!(field, Err(CompactDecodingError::UnexpectedEnd))
-        }));
+        #[cfg(feature = "storage-validation")]
+        assert_eq!(result.err(), Some(CompactDecodingError::UnexpectedEnd));
+
+        #[cfg(not(feature = "storage-validation"))]
+        {
+            let view = result.unwrap();
+
+            assert_eq!(view.message(), "data");
+            assert!(view.fields().any(|field| {
+                matches!(field, Err(CompactDecodingError::UnexpectedEnd))
+            }));
+        }
     }
 
     #[test]

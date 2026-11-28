@@ -152,35 +152,41 @@ mod tests {
     }
 
     #[test]
-    fn view_validates_truncated_fields_according_to_mode() {
-        let mut store = CompactEventStore::new();
-        let input = event("data");
-
-        store
-            .push(IncomingEventRef::from(&input))
-            .unwrap();
-
-        let end =
-            store.metadata[0].payload_offset + store.metadata[0].payload_len;
-
-        store
-            .payloads
-            .truncate_for_test(end - 1);
-        store.metadata[0].payload_len -= 1;
-
-        let result = store.view(&store.metadata[0]);
-
-        #[cfg(feature = "storage-validation")]
-        assert_eq!(result.err(), Some(CompactDecodingError::UnexpectedEnd));
-
-        #[cfg(not(feature = "storage-validation"))]
-        {
-            let view = result.unwrap();
-
-            assert_eq!(view.message(), "data");
-            assert!(view.fields().any(|field| {
-                matches!(field, Err(CompactDecodingError::UnexpectedEnd))
-            }));
+    fn variable_records_preserve_fifo_contents() {
+        let mut ring = PayloadBuffer::new(127);
+        let mut records: VecDeque<(usize, Vec<u8>)> = VecDeque::new();
+        let mut state = 12345_u32;
+        for _ in 0..10000 {
+            state = state
+                .wrapping_mul(1664525)
+                .wrapping_add(1013904223);
+            let len = (state as usize % 127) + 1;
+            let payload = vec![(state >> 16) as u8; len];
+            loop {
+                if let Some(offset) = ring.push(&payload) {
+                    records.push_back((offset, payload));
+                    break;
+                }
+                let (offset, old) = records.pop_front().unwrap();
+                ring.release(
+                    offset,
+                    old.len(),
+                    records.front().map(|record| record.0),
+                );
+            }
+            for (offset, expected) in &records {
+                assert_eq!(
+                    ring.get(*offset, expected.len()),
+                    Some(expected.as_slice())
+                );
+            }
+            assert_eq!(
+                ring.live_bytes,
+                records
+                    .iter()
+                    .map(|record| record.1.len())
+                    .sum::<usize>()
+            );
         }
     }
 }
