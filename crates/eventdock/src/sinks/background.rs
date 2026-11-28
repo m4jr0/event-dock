@@ -31,6 +31,8 @@ enum Command {
 /// Moves sink operations to a dedicated worker. Successful submission means
 /// queued, not delivered. A full queue rejects events with WouldBlock.
 /// Call shutdown explicitly to drain the queue and observe worker errors.
+/// Dropping the wrapper closes the queue but detaches the worker. Neither
+/// shutdown nor flush has a total deadline: downstream sinks may block.
 #[derive(Debug)]
 pub struct BackgroundSink<S> {
     sender: SyncSender<Command>,
@@ -76,7 +78,8 @@ impl<S: LogSink + Send + 'static> BackgroundSink<S> {
     }
 
     /// Drain accepted events, flush, join, and return the downstream sink.
-    /// May block on downstream I/O. Reports the original worker error.
+    /// May block indefinitely on downstream I/O. Reports the original worker error.
+    /// A finite downstream per-operation timeout does not bound the entire drain.
     pub fn shutdown(self) -> Result<S, EventDockError> {
         let Self { sender, worker } = self;
         drop(sender);

@@ -18,7 +18,7 @@ impl Default for TcpSinkConfig {
         Self {
             buffer_capacity: 8 * 1024,
             nodelay: true,
-            write_timeout: None,
+            write_timeout: Some(Duration::from_secs(5)),
             flush_on_submit: true,
         }
     }
@@ -69,6 +69,7 @@ impl TcpSinkConfig {
         self
     }
 
+    /// Set the per-write socket timeout. None permits indefinite blocking.
     #[must_use]
     pub fn with_write_timeout(
         mut self,
@@ -108,7 +109,7 @@ impl TcpSinkConfig {
 /// Sends newline-delimited JSON events over a persistent TCP connection.
 #[derive(Debug)]
 pub struct TcpSink {
-    writer: BufWriter<TcpStream>,
+    writer: Option<BufWriter<TcpStream>>,
     staging: Vec<u8>,
     state: TcpSinkState,
     flush_on_submit: bool,
@@ -132,7 +133,10 @@ impl TcpSink {
         stream.set_write_timeout(config.write_timeout)?;
 
         Ok(Self {
-            writer: BufWriter::with_capacity(config.buffer_capacity, stream),
+            writer: Some(BufWriter::with_capacity(
+                config.buffer_capacity,
+                stream,
+            )),
             staging: Vec::new(),
             state: TcpSinkState::Connected,
             flush_on_submit: config.flush_on_submit,
@@ -158,12 +162,25 @@ impl TcpSink {
     pub fn flush(&mut self) -> Result<(), EventDockError> {
         self.ensure_connected()?;
 
-        if let Err(error) = self.writer.flush() {
-            self.state = TcpSinkState::Failed;
+        if let Err(error) = self
+            .writer
+            .as_mut()
+            .expect("connected writer")
+            .flush()
+        {
+            self.fail();
             return Err(error.into());
         }
 
         Ok(())
+    }
+
+    fn fail(&mut self) {
+        self.state = TcpSinkState::Failed;
+        if let Some(writer) = self.writer.take() {
+            // Discard buffered output without retrying failed writes on drop.
+            let _ = writer.into_parts();
+        }
     }
 
     fn ensure_connected(&self) -> Result<(), EventDockError> {
@@ -187,8 +204,13 @@ impl LogSink for TcpSink {
         self.ensure_connected()?;
         self.serialize(event)?;
 
-        if let Err(error) = self.writer.write_all(&self.staging) {
-            self.state = TcpSinkState::Failed;
+        if let Err(error) = self
+            .writer
+            .as_mut()
+            .expect("connected writer")
+            .write_all(&self.staging)
+        {
+            self.fail();
             return Err(error.into());
         }
 
@@ -403,9 +425,22 @@ mod tests {
                 .unwrap();
         }
 
-        assert!(!sink.writer.buffer().is_empty());
+        assert!(
+            !sink
+                .writer
+                .as_ref()
+                .unwrap()
+                .buffer()
+                .is_empty()
+        );
         LogSink::flush(&mut sink).unwrap();
-        assert!(sink.writer.buffer().is_empty());
+        assert!(
+            sink.writer
+                .as_ref()
+                .unwrap()
+                .buffer()
+                .is_empty()
+        );
 
         let lines = receiver.join().unwrap().unwrap();
         let messages: Vec<String> = lines
@@ -417,6 +452,56 @@ mod tests {
             })
             .collect();
         assert_eq!(messages, ["first", "second"]);
+    }
+
+    #[test]
+    fn default_write_timeout_is_finite() {
+        assert_eq!(
+            TcpSinkConfig::default().write_timeout(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            TcpSinkConfig::default()
+                .with_write_timeout(None)
+                .write_timeout(),
+            None
+        );
+    }
+
+    #[test]
+    fn failed_sink_discards_buffered_output() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let config = TcpSinkConfig::default().with_flush_on_submit(false);
+        let mut sink = TcpSink::connect_with_config(
+            listener.local_addr().unwrap(),
+            config,
+        )
+        .unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(TEST_TIMEOUT))
+            .unwrap();
+        let event = make_event("discard me");
+        sink.submit(IncomingEventRef::from(&event))
+            .unwrap();
+        assert!(
+            !sink
+                .writer
+                .as_ref()
+                .unwrap()
+                .buffer()
+                .is_empty()
+        );
+        sink.fail();
+        assert_eq!(sink.state(), TcpSinkState::Failed);
+        assert!(sink.writer.is_none());
+        let mut line = String::new();
+        assert_eq!(
+            BufReader::new(stream)
+                .read_line(&mut line)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
