@@ -21,7 +21,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 fn validate_request(
-    request: QueryRequest,
+    request: &QueryRequest,
     max_query_events: usize,
 ) -> io::Result<EventQuery> {
     if request.limit == 0 || request.limit > max_query_events {
@@ -159,15 +159,14 @@ fn execute_request(
     max_query_events: usize,
     connection: &ConnectionIo<'_>,
 ) -> io::Result<QueryResponse> {
-    let query = validate_request(request, max_query_events)?;
+    validate_request(&request, max_query_events)?;
     connection.remaining()?;
-    let pending = backend.submit_query(query)?;
+    let pending = backend.submit_client_query(request)?;
     loop {
-        let wait = connection.remaining()?;
-        if let Some(result) = pending.try_recv()? {
-            return Ok(result.into());
+        if let Some(result) = pending.wait_timeout(connection.remaining()?)? {
+            connection.remaining()?;
+            return Ok(result);
         }
-        thread::sleep(wait);
     }
 }
 
@@ -188,6 +187,14 @@ pub fn serve_queries(
         ));
     }
     listener.set_nonblocking(true)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()?;
+    let listener = {
+        let _guard = runtime.enter();
+        tokio::net::TcpListener::from_std(listener)?
+    };
     let (sender, receiver) =
         mpsc::sync_channel::<(TcpStream, Instant)>(queue_capacity);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -237,7 +244,9 @@ pub fn serve_queries(
             }
         }
     }
-    let result = accept_queries(&listener, &sender, &running);
+    drop(receiver);
+    let result = runtime
+        .block_on(accept_queries(&listener, &sender, &running, &handles));
     running.store(false, Ordering::Release);
     drop(sender);
     let joined = join_workers(handles);
@@ -256,14 +265,24 @@ fn join_workers(handles: Vec<thread::JoinHandle<()>>) -> io::Result<()> {
     }
 }
 
-fn accept_queries(
-    listener: &TcpListener,
+async fn accept_queries(
+    listener: &tokio::net::TcpListener,
     sender: &SyncSender<(TcpStream, Instant)>,
     running: &AtomicBool,
+    workers: &[thread::JoinHandle<()>],
 ) -> io::Result<()> {
     while running.load(Ordering::Acquire) {
-        match listener.accept() {
-            Ok((stream, _)) => {
+        if workers
+            .iter()
+            .any(|worker| worker.is_finished())
+        {
+            return Err(io::Error::other("query worker stopped"));
+        }
+        match tokio::time::timeout(ACCEPT_POLL_INTERVAL, listener.accept())
+            .await
+        {
+            Ok(Ok((stream, _))) => {
+                let stream = stream.into_std()?;
                 match sender.try_send((stream, Instant::now() + TIMEOUT)) {
                     Ok(()) => {}
                     Err(TrySendError::Full((mut stream, _))) => {
@@ -278,10 +297,11 @@ fn accept_queries(
                     }
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(ACCEPT_POLL_INTERVAL)
+            Err(_) => continue,
+            Ok(Err(error)) if error.kind() == io::ErrorKind::Interrupted => {
+                continue;
             }
-            Err(error) => return Err(error),
+            Ok(Err(error)) => return Err(error),
         }
     }
     Ok(())
@@ -363,7 +383,7 @@ mod tests {
             level: None,
         };
         assert_eq!(
-            validate_request(request, 512)
+            validate_request(&request, 512)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidInput

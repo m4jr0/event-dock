@@ -108,6 +108,18 @@ impl PendingQuery {
             .result
     }
 
+    /// Wait for a response without abandoning the query when the wait expires.
+    pub fn wait_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> io::Result<Option<QueryResponse>> {
+        match self.response.recv_timeout(timeout) {
+            Ok(completion) => completion.result.map(Some),
+            Err(flume::RecvTimeoutError::Timeout) => Ok(None),
+            Err(flume::RecvTimeoutError::Disconnected) => Err(disconnected()),
+        }
+    }
+
     pub async fn recv_async(self) -> io::Result<QueryResponse> {
         self.response
             .recv_async()
@@ -176,6 +188,28 @@ mod tests {
         assert!(admission.try_channel().is_err());
         drop(reply);
         assert!(admission.try_channel().is_ok());
+    }
+
+    #[test]
+    fn wait_timeout_preserves_pending_query() {
+        let (reply, pending) = query_reply_channel();
+        assert!(
+            pending
+                .wait_timeout(std::time::Duration::ZERO)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!reply.is_cancelled());
+        assert!(reply.complete(Ok(QueryResponse {
+            events: Vec::new(),
+            next_cursor: None,
+        })));
+        assert!(
+            pending
+                .wait_timeout(std::time::Duration::ZERO)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
