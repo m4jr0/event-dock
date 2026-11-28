@@ -82,9 +82,9 @@ impl QueryScheduler {
             .take()
             .expect("active query");
         if !request.reply.is_disconnected() {
-            let _ = request
+            request
                 .reply
-                .send(execution.finish(store));
+                .complete(execution.finish(store));
         }
     }
 }

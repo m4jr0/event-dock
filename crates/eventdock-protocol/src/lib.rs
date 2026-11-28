@@ -1,5 +1,7 @@
 //! Shared query contracts, independent of engine execution and transport.
+mod pending;
 use eventdock_core::{EventId, LogLevel};
+pub use pending::{PendingQuery, QueryReply, query_reply_channel};
 use serde::{Deserialize, Serialize};
 
 /// A bounded page of events, ordered from newest to oldest.

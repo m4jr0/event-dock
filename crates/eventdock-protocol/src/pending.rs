@@ -1,4 +1,4 @@
-use eventdock_protocol::QueryResponse;
+use crate::QueryResponse;
 use std::io;
 
 pub struct PendingQuery {

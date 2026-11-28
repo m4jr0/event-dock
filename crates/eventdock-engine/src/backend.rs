@@ -40,7 +40,35 @@ fn storage_stopped() -> io::Error {
 
 pub(crate) struct QueryRequest {
     pub query: EventQuery,
-    pub reply: flume::Sender<EventQueryResult>,
+    pub reply: Reply,
+}
+
+pub(crate) enum Reply {
+    Legacy(flume::Sender<EventQueryResult>),
+    Client(eventdock_protocol::QueryReply),
+}
+
+impl Reply {
+    pub(crate) fn is_disconnected(&self) -> bool {
+        match self {
+            Self::Legacy(reply) => reply.is_disconnected(),
+            Self::Client(reply) => reply.is_cancelled(),
+        }
+    }
+
+    pub(crate) fn complete(
+        self,
+        result: EventQueryResult,
+    ) {
+        match self {
+            Self::Legacy(reply) => {
+                let _ = reply.try_send(result);
+            }
+            Self::Client(reply) => {
+                reply.complete(Ok(result.into()));
+            }
+        }
+    }
 }
 
 pub struct Backend {
@@ -117,6 +145,33 @@ impl Backend {
         &self,
         query: EventQuery,
     ) -> io::Result<PendingQuery> {
+        let (reply, response) = flume::bounded(1);
+        self.enqueue_query(query, Reply::Legacy(reply))?;
+        Ok(PendingQuery { response })
+    }
+
+    /// Submit a typed client request without serialization or blocking.
+    pub fn submit_client_query(
+        &self,
+        request: eventdock_protocol::QueryRequest,
+    ) -> io::Result<eventdock_protocol::PendingQuery> {
+        let (reply, pending) = eventdock_protocol::query_reply_channel();
+        self.enqueue_query(
+            EventQuery {
+                limit: request.limit,
+                before_id: request.before_id,
+                level: request.level,
+            },
+            Reply::Client(reply),
+        )?;
+        Ok(pending)
+    }
+
+    fn enqueue_query(
+        &self,
+        query: EventQuery,
+        reply: Reply,
+    ) -> io::Result<()> {
         if query.limit == 0 || query.limit > self.max_query_events {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -127,7 +182,6 @@ impl Backend {
             ));
         }
 
-        let (reply, response) = flume::bounded(1);
         let request = QueryRequest { query, reply };
 
         self.query_sender
@@ -142,7 +196,7 @@ impl Backend {
                 flume::TrySendError::Disconnected(_) => storage_stopped(),
             })?;
 
-        Ok(PendingQuery { response })
+        Ok(())
     }
 
     /// Submit a query and wait for its result.

@@ -1340,6 +1340,7 @@ version = "0.1.0"
 dependencies = [
  "eventdock-protocol",
  "flume",
+ "serde_json",
 ]
 
 [[package]]
@@ -1383,6 +1384,7 @@ name = "eventdock-protocol"
 version = "0.1.0"
 dependencies = [
  "eventdock-core",
+ "flume",
  "serde",
  "serde_json",
 ]

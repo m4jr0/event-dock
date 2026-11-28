@@ -168,7 +168,7 @@ mod tests {
                             limit: 64,
                             level: None,
                         },
-                        reply,
+                        reply: crate::backend::Reply::Legacy(reply),
                     },
                     TIMEOUT,
                 )
