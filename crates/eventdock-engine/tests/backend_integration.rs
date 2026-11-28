@@ -294,3 +294,154 @@ fn stopped_ingestion_preserves_history() {
         1
     );
 }
+
+#[test]
+fn sustained_ingestion_preserves_resource_invariants() {
+    const CLIENTS: usize = 4;
+    const PER_WAVE: usize = 1000;
+    const WAVES: usize = 4;
+    const PAYLOAD: usize = 64 * 1024;
+    const CAPACITY: usize = 128;
+    const BUDGET: usize = 4096;
+    let mut backend = Backend::start(BackendConfig {
+        event_capacity: CAPACITY,
+        payload_capacity: PAYLOAD,
+        queue_capacity: 8,
+        max_event_bytes: 2048,
+        ingestion_byte_capacity: BUDGET,
+        max_query_text_bytes: 4096,
+        ..config()
+    })
+    .unwrap();
+    let address = backend.address();
+    let mut previous_allocated = 0;
+    for wave in 0..WAVES {
+        thread::scope(|scope| {
+            for client in 0..CLIENTS {
+                scope.spawn(move || {
+                    let mut stream = TcpStream::connect(address).unwrap();
+                    stream.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
+                    for index in 0..PER_WAVE {
+                        let message = "x".repeat(32 + (index * 37 + client * 13) % 1200);
+                        let frame = format!("{{\"timestamp\":42,\"source\":\"test\",\"level\":\"info\",\"message\":\"{message}\"}}\n");
+                        stream.write_all(frame.as_bytes()).unwrap();
+                    }
+                    stream.shutdown(Shutdown::Write).unwrap();
+                });
+            }
+            for _ in 0..32 {
+                let page = backend
+                    .query(eventdock_engine::EventQuery {
+                        before_id: None,
+                        limit: 128,
+                        level: None,
+                    })
+                    .unwrap();
+                assert!(
+                    page.events
+                        .windows(2)
+                        .all(|pair| pair[0].id > pair[1].id)
+                );
+                assert!(
+                    page.events
+                        .iter()
+                        .map(|event| event.source.len() + event.message.len())
+                        .sum::<usize>()
+                        <= 4096
+                );
+            }
+        });
+        let expected = ((wave + 1) * CLIENTS * PER_WAVE) as u64;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let snapshot = loop {
+            let snapshot = backend.snapshot();
+            assert!(
+                snapshot
+                    .ingestion_budget
+                    .unavailable_bytes
+                    <= BUDGET
+            );
+            if snapshot.stored_total == expected
+                && snapshot
+                    .ingestion_budget
+                    .unavailable_bytes
+                    == 0
+                && snapshot.network.active_connections == 0
+            {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ingestion stalled: {snapshot:?}"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(snapshot.rejected_total, 0);
+        assert_eq!(snapshot.network.malformed_events, 0);
+        assert!(snapshot.retained_events <= CAPACITY);
+        assert!(
+            snapshot
+                .storage_memory
+                .live_payload_bytes
+                <= PAYLOAD
+        );
+        assert_eq!(
+            snapshot.stored_total,
+            snapshot.retained_events as u64
+                + snapshot.retention.evicted_total()
+        );
+        assert!(
+            snapshot
+                .storage_memory
+                .payload_allocated_bytes
+                <= 2 * PAYLOAD
+        );
+        let allocated = snapshot
+            .storage_memory
+            .allocated_bytes();
+        if wave >= 2 {
+            assert_eq!(
+                allocated, previous_allocated,
+                "storage allocation did not stabilize"
+            );
+        }
+        previous_allocated = allocated;
+    }
+    backend.stop_ingestion().unwrap();
+    let mut cursor = None;
+    let mut ids = Vec::new();
+    loop {
+        let page = backend
+            .query(eventdock_engine::EventQuery {
+                before_id: cursor,
+                limit: 128,
+                level: None,
+            })
+            .unwrap();
+        ids.extend(page.events.iter().map(|event| event.id));
+        match page.next_cursor {
+            Some(next) => {
+                assert!(cursor.is_none_or(|old| next < old));
+                cursor = Some(next);
+            }
+            None => break,
+        }
+    }
+    let snapshot = backend.shutdown().unwrap();
+    assert_eq!(ids.len(), snapshot.retained_events);
+    assert!(
+        ids.windows(2)
+            .all(|pair| pair[0] == pair[1] + 1)
+    );
+    assert_eq!(
+        ids.first().copied(),
+        Some((CLIENTS * PER_WAVE * WAVES - 1) as u64)
+    );
+    assert_eq!(
+        snapshot
+            .ingestion_budget
+            .unavailable_bytes,
+        0
+    );
+    assert_eq!(snapshot.pending_work.ingestion.queued, 0);
+}
