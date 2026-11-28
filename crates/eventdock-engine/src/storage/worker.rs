@@ -68,7 +68,7 @@ impl StorageWorker {
         self.stores.retain_mut(|store| {
             worked |= store.advance();
             if store.is_closed() {
-                store.snapshots.publish(&store.store);
+                store.publish_snapshot();
                 false
             } else {
                 true
@@ -136,6 +136,7 @@ impl StorageWorker {
 
 pub(super) struct StoreTask {
     store: CompactEventStore,
+    ingestion_capacity: usize,
     receiver: Option<Receiver<IncomingEvent>>,
     snapshots: SnapshotPublisher,
     queries: QueryScheduler,
@@ -154,6 +155,7 @@ impl StoreTask {
                 config.event_capacity,
                 config.payload_capacity,
             ),
+            ingestion_capacity: config.queue_capacity,
             receiver: Some(receiver),
             snapshots: SnapshotPublisher::new(
                 publisher,
@@ -168,9 +170,40 @@ impl StoreTask {
         let had_query = self.queries.has_work();
         self.queries.advance(&self.store);
         let ingested = self.receive_event();
-        self.snapshots
-            .publish_if_due(&self.store);
+        if self
+            .snapshots
+            .time_until_due()
+            .is_zero()
+        {
+            self.publish_snapshot();
+        }
         had_query || ingested || self.queries.has_work()
+    }
+
+    fn pending_work_usage(&self) -> crate::PendingWorkUsage {
+        let requests = self.queries.requests();
+        crate::PendingWorkUsage {
+            ingestion: crate::QueueUsage {
+                queued: self
+                    .receiver
+                    .as_ref()
+                    .map_or(0, Receiver::len),
+                capacity: self.ingestion_capacity,
+            },
+            queries: crate::QueueUsage {
+                queued: requests.len(),
+                capacity: requests
+                    .capacity()
+                    .expect("bounded query queue"),
+            },
+            active_query: self.queries.has_active_query(),
+        }
+    }
+
+    fn publish_snapshot(&mut self) {
+        let pending_work = self.pending_work_usage();
+        self.snapshots
+            .publish(&self.store, pending_work);
     }
 
     fn is_closed(&self) -> bool {
@@ -209,5 +242,59 @@ impl StoreTask {
             .is_ok();
         self.snapshots
             .record_ingestion(accepted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_work_reports_queue_occupancy() {
+        let config = BackendConfig {
+            queue_capacity: 2,
+            query_queue_capacity: 3,
+            ..BackendConfig::default()
+        };
+        let (sender, receiver) = flume::bounded(2);
+        let (_queries, requests) = flume::bounded(3);
+        let mut store = StoreTask::new(
+            config,
+            receiver,
+            Arc::new(SharedSnapshot::default()),
+            Arc::new(Counters::default()),
+            requests,
+        );
+        sender
+            .try_send(IncomingEvent::new(
+                "test",
+                eventdock_core::LogLevel::Info,
+                "message",
+            ))
+            .unwrap();
+        let usage = store.pending_work_usage();
+        assert_eq!(
+            usage.ingestion,
+            crate::QueueUsage {
+                queued: 1,
+                capacity: 2
+            }
+        );
+        assert_eq!(
+            usage.queries,
+            crate::QueueUsage {
+                queued: 0,
+                capacity: 3
+            }
+        );
+        assert!(!usage.active_query);
+        assert!(store.receive_event());
+        assert_eq!(
+            store
+                .pending_work_usage()
+                .ingestion
+                .queued,
+            0
+        );
     }
 }

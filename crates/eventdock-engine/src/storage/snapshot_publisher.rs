@@ -45,20 +45,13 @@ impl SnapshotPublisher {
             .saturating_duration_since(Instant::now())
     }
 
-    pub(super) fn publish_if_due(
-        &mut self,
-        store: &crate::CompactEventStore,
-    ) {
-        if Instant::now() >= self.deadline {
-            self.publish(store);
-            self.deadline = Instant::now() + self.interval;
-        }
-    }
-
     pub(super) fn publish(
         &mut self,
         store: &crate::CompactEventStore,
+        pending_work: crate::PendingWorkUsage,
     ) {
+        self.deadline = Instant::now() + self.interval;
+        self.snapshot.pending_work = pending_work;
         self.snapshot.retained_events = store.len();
         self.snapshot.storage_memory = store.memory_usage();
         self.snapshot.retention = store.retention_statistics();

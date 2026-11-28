@@ -31,6 +31,10 @@ impl QueryScheduler {
         self.active.is_some() || !self.requests.is_empty()
     }
 
+    pub(super) fn has_active_query(&self) -> bool {
+        self.active.is_some()
+    }
+
     pub(super) fn requests(&self) -> &Receiver<QueryRequest> {
         &self.requests
     }

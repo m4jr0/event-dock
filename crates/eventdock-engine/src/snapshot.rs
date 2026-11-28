@@ -47,6 +47,21 @@ impl RetentionStatistics {
     }
 }
 
+/// Sample bounded queue occupancy, excluding blocked senders and completed replies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueueUsage {
+    pub queued: usize,
+    pub capacity: usize,
+}
+
+/// Report pending work separately from retained storage memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PendingWorkUsage {
+    pub ingestion: QueueUsage,
+    pub queries: QueueUsage,
+    pub active_query: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackendSnapshot {
     pub stored_total: u64,
@@ -55,5 +70,6 @@ pub struct BackendSnapshot {
     /// Storage usage at publication time, before any subsequent destruction.
     pub storage_memory: StorageMemoryUsage,
     pub retention: RetentionStatistics,
+    pub pending_work: PendingWorkUsage,
     pub network: NetworkSnapshot,
 }
