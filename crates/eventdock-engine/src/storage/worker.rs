@@ -9,33 +9,57 @@ use eventdock_core::{IncomingEvent, IncomingEventRef};
 use flume::{Receiver, Selector, TryRecvError};
 use std::sync::Arc;
 
-pub(crate) fn run_storage(
+pub(super) fn create_store(
     config: BackendConfig,
     receiver: Receiver<IncomingEvent>,
     publisher: Arc<SharedSnapshot>,
     counters: Arc<Counters>,
     queries: Receiver<QueryRequest>,
-) {
-    let task = StoreTask::new(config, receiver, publisher, counters, queries);
-    StorageWorker { stores: vec![task] }.run();
+) -> StoreTask {
+    StoreTask::new(config, receiver, publisher, counters, queries)
 }
 
 enum Wake {
+    Registration(Result<StoreTask, flume::RecvError>),
     Event(usize, Result<IncomingEvent, flume::RecvError>),
     Query(usize, Result<QueryRequest, flume::RecvError>),
 }
 
-struct StorageWorker {
+pub(super) struct StorageWorker {
     stores: Vec<StoreTask>,
+    registrations: Receiver<StoreTask>,
 }
 
 impl StorageWorker {
-    fn run(&mut self) {
-        while !self.stores.is_empty() {
+    pub(super) fn new(registrations: Receiver<StoreTask>) -> Self {
+        Self {
+            stores: Vec::new(),
+            registrations,
+        }
+    }
+
+    pub(super) fn run(&mut self) {
+        loop {
+            let registered = self.accept_registration();
             let worked = self.advance_stores();
-            if !worked && !self.stores.is_empty() {
+            if self.stores.is_empty()
+                && self.registrations.is_disconnected()
+                && self.registrations.is_empty()
+            {
+                break;
+            }
+            if !worked && !registered {
                 self.wait_for_work();
             }
+        }
+    }
+
+    fn accept_registration(&mut self) -> bool {
+        if let Ok(store) = self.registrations.try_recv() {
+            self.stores.push(store);
+            true
+        } else {
+            false
         }
     }
 
@@ -57,6 +81,13 @@ impl StorageWorker {
 
     fn wait_for_work(&mut self) {
         let mut selector = Selector::new();
+        if !self.registrations.is_disconnected()
+            || !self.registrations.is_empty()
+        {
+            selector = selector.recv(&self.registrations, Wake::Registration);
+        } else if self.stores.is_empty() {
+            return;
+        }
         for (index, store) in self.stores.iter().enumerate() {
             if let Some(receiver) = &store.receiver {
                 selector = selector
@@ -80,28 +111,32 @@ impl StorageWorker {
             .stores
             .iter()
             .map(|store| store.snapshots.time_until_due())
-            .min()
-            .expect("nonempty worker");
-        let wake = selector.wait_timeout(wait);
+            .min();
+        let wake = match wait {
+            Some(wait) => selector.wait_timeout(wait).ok(),
+            None => Some(selector.wait()),
+        };
         match wake {
-            Ok(Wake::Event(index, Ok(event))) => {
+            Some(Wake::Registration(Ok(store))) => self.stores.push(store),
+            Some(Wake::Registration(Err(_))) => {}
+            Some(Wake::Event(index, Ok(event))) => {
                 self.stores[index].ingest(&event)
             }
-            Ok(Wake::Event(index, Err(_))) => {
+            Some(Wake::Event(index, Err(_))) => {
                 self.stores[index].receiver = None
             }
-            Ok(Wake::Query(index, Ok(request))) => {
+            Some(Wake::Query(index, Ok(request))) => {
                 let store = &mut self.stores[index];
                 store
                     .queries
                     .accept_request(request, &store.store);
             }
-            Ok(Wake::Query(_, Err(_))) | Err(_) => {}
+            Some(Wake::Query(_, Err(_))) | None => {}
         }
     }
 }
 
-struct StoreTask {
+pub(super) struct StoreTask {
     store: CompactEventStore,
     receiver: Option<Receiver<IncomingEvent>>,
     snapshots: SnapshotPublisher,

@@ -2,14 +2,13 @@ use crate::{
     BackendConfig, BackendSnapshot,
     query::{EventQuery, EventQueryResult},
     shared_snapshot::SharedSnapshot,
-    storage::run_storage,
+    storage::StoragePool,
     transport::{CollectorLimits, CollectorTask, Counters, NetworkRuntime},
 };
 use std::{
     io,
     net::{SocketAddr, TcpListener},
     sync::Arc,
-    thread::{self, JoinHandle},
 };
 
 /// A pending query response. Dropping it cancels an unstarted query.
@@ -44,13 +43,11 @@ pub(crate) struct QueryRequest {
     pub reply: flume::Sender<EventQueryResult>,
 }
 
-const STORAGE_THREAD_NAME: &str = "eventdock-storage";
-
 pub struct Backend {
     address: SocketAddr,
     network: Option<CollectorTask>,
     _network_runtime: NetworkRuntime,
-    storage: Option<JoinHandle<()>>,
+    storage: Option<StoragePool>,
     snapshot: Arc<SharedSnapshot>,
     query_sender: Option<flume::Sender<QueryRequest>>,
     max_query_events: usize,
@@ -82,13 +79,17 @@ impl Backend {
             limits,
         );
 
-        let storage_result = spawn_storage_worker(
-            config,
-            receiver,
-            Arc::clone(&snapshot),
-            counters,
-            query_receiver,
-        );
+        let storage_result = StoragePool::new(config.storage_worker_count)
+            .and_then(|mut pool| {
+                pool.register(
+                    config,
+                    receiver,
+                    Arc::clone(&snapshot),
+                    counters,
+                    query_receiver,
+                )?;
+                Ok(pool)
+            });
 
         let storage = match storage_result {
             Ok(worker) => worker,
@@ -194,9 +195,9 @@ impl Backend {
             .storage
             .take()
             .expect("storage handle")
-            .join();
+            .shutdown();
 
-        storage.map_err(|_| io::Error::other("storage worker panicked"))?;
+        storage?;
         network?;
 
         Ok(self.snapshot())
@@ -208,18 +209,4 @@ fn bind_listener(config: &BackendConfig) -> io::Result<TcpListener> {
     listener.set_nonblocking(true)?;
 
     Ok(listener)
-}
-
-fn spawn_storage_worker(
-    config: BackendConfig,
-    receiver: flume::Receiver<eventdock_core::IncomingEvent>,
-    snapshot: Arc<SharedSnapshot>,
-    counters: Arc<Counters>,
-    queries: flume::Receiver<QueryRequest>,
-) -> io::Result<JoinHandle<()>> {
-    thread::Builder::new()
-        .name(STORAGE_THREAD_NAME.into())
-        .spawn(move || {
-            run_storage(config, receiver, snapshot, counters, queries)
-        })
 }

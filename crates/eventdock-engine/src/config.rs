@@ -3,6 +3,7 @@ use std::{io, net::SocketAddr, time::Duration};
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
     pub address: SocketAddr,
+    pub storage_worker_count: usize,
     pub event_capacity: usize,
     pub payload_capacity: usize,
     pub queue_capacity: usize,
@@ -18,6 +19,7 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             address: SocketAddr::from(([127, 0, 0, 1], 7878)),
+            storage_worker_count: 1,
             event_capacity: 100_000,
             payload_capacity: 64 * 1024 * 1024,
             queue_capacity: 4096,
@@ -33,7 +35,8 @@ impl Default for BackendConfig {
 
 impl BackendConfig {
     pub(crate) fn validate(&self) -> io::Result<()> {
-        if self.event_capacity == 0
+        if self.storage_worker_count == 0
+            || self.event_capacity == 0
             || self.payload_capacity == 0
             || self.queue_capacity == 0
             || self.query_queue_capacity == 0

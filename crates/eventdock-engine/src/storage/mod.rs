@@ -1,10 +1,11 @@
 //! Backend-neutral access to retained event history.
 
 pub mod compact;
+mod pool;
 mod query_scheduler;
 mod snapshot_publisher;
 mod worker;
-pub(crate) use worker::run_storage;
+pub(crate) use pool::StoragePool;
 mod error;
 mod owned;
 
