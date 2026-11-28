@@ -26,6 +26,12 @@ pub use storage::compact::{
     CompactDecodingError, CompactEncodingError, CompactEventStore,
     CompactEventView, CompactStoreError, FieldIter, FieldValueView, FieldView,
 };
-pub use storage::{EventStore, StoredEvent, EventStorage, EventSummary, EventViewAccess, StorageError};
+pub use storage::{
+    EventStorage, EventStore, EventSummary, EventViewAccess, StorageError,
+    StoredEvent,
+};
 
-use eventdock_core::{EventId, FieldValue, Fields, IncomingEvent, IncomingEventRef, LogLevel, Timestamp};
+use eventdock_core::{
+    EventId, FieldValue, Fields, IncomingEvent, IncomingEventRef, LogLevel,
+    Timestamp,
+};

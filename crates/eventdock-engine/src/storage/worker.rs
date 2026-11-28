@@ -1,15 +1,15 @@
-use crate::{
-    BackendConfig, BackendSnapshot, backend::QueryRequest,
-    query::QueryExecution, shared_snapshot::SharedSnapshot,
-    transport::Counters,
+use super::{
+    query_scheduler::QueryScheduler, snapshot_publisher::SnapshotPublisher,
 };
-use crate::CompactEventStore;
+use crate::{
+    BackendConfig, CompactEventStore, backend::QueryRequest,
+    shared_snapshot::SharedSnapshot, transport::Counters,
+};
 use eventdock_core::{IncomingEvent, IncomingEventRef};
 use flume::{Receiver, RecvTimeoutError};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
+
+const MAX_INGESTION_WAIT: Duration = Duration::from_millis(2);
 
 pub(crate) fn run_storage(
     config: BackendConfig,
@@ -18,82 +18,64 @@ pub(crate) fn run_storage(
     counters: Arc<Counters>,
     queries: Receiver<QueryRequest>,
 ) {
-    let mut store = CompactEventStore::with_limits(
-        config.event_capacity,
-        config.payload_capacity,
-    );
+    let mut worker = StorageWorker {
+        store: CompactEventStore::with_limits(
+            config.event_capacity,
+            config.payload_capacity,
+        ),
+        receiver,
+        snapshots: SnapshotPublisher::new(
+            publisher,
+            counters,
+            config.snapshot_interval,
+        ),
+        queries: QueryScheduler::new(queries, config.query_scan_budget),
+    };
+    worker.run();
+}
 
-    let mut snapshot = BackendSnapshot::default();
-    let interval = config.snapshot_interval;
-    let mut deadline = Instant::now() + interval;
-    let mut active_query: Option<(QueryRequest, QueryExecution)> = None;
+struct StorageWorker {
+    store: CompactEventStore,
+    receiver: Receiver<IncomingEvent>,
+    snapshots: SnapshotPublisher,
+    queries: QueryScheduler,
+}
 
-    loop {
-        // Only one query executes at a time; the bounded channel queues others.
-        if active_query.is_none()
-            && let Ok(request) = queries.try_recv()
-            && !request.reply.is_disconnected()
-        {
-            let execution = QueryExecution::new(request.query, &store);
-            active_query = Some((request, execution));
-        }
-
-        // A query cannot monopolize the storage worker: scan a bounded slice,
-        // then return to ingestion and snapshot publication.
-        if let Some((request, execution)) = active_query.as_mut() {
-            if request.reply.is_disconnected() {
-                active_query = None;
-            } else if execution.advance(&store, config.query_scan_budget) {
-                let (request, execution) = active_query.take().unwrap();
-                if !request.reply.is_disconnected() {
-                    let _ = request
-                        .reply
-                        .send(execution.finish(&store));
-                }
+impl StorageWorker {
+    fn run(&mut self) {
+        loop {
+            self.queries.advance(&self.store);
+            if !self.receive_event() {
+                break;
             }
+            self.snapshots
+                .publish_if_due(self.store.len());
         }
+        self.snapshots.publish(self.store.len());
+    }
 
-        let wait = deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(2));
-
-        match receiver.recv_timeout(wait) {
-            Ok(event) => process_event(&mut store, &mut snapshot, &event),
+    fn receive_event(&mut self) -> bool {
+        let wait = self
+            .snapshots
+            .time_until_due()
+            .min(MAX_INGESTION_WAIT);
+        match self.receiver.recv_timeout(wait) {
+            Ok(event) => self.ingest(&event),
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Disconnected) => return false,
         }
-
-        if Instant::now() >= deadline {
-            publish(&publisher, &mut snapshot, &counters, store.len());
-            deadline = Instant::now() + interval;
-        }
+        true
     }
 
-    publish(&publisher, &mut snapshot, &counters, store.len());
-}
-
-fn process_event(
-    store: &mut CompactEventStore,
-    snapshot: &mut BackendSnapshot,
-    event: &IncomingEvent,
-) {
-    let result = store.push(IncomingEventRef::from(event));
-
-    if result.is_err() {
-        snapshot.rejected_total += 1;
-        return;
+    fn ingest(
+        &mut self,
+        event: &IncomingEvent,
+    ) {
+        let accepted = self
+            .store
+            .push(IncomingEventRef::from(event))
+            .is_ok();
+        self.snapshots
+            .record_ingestion(accepted);
     }
-
-    snapshot.stored_total += 1;
-}
-
-fn publish(
-    publisher: &SharedSnapshot,
-    snapshot: &mut BackendSnapshot,
-    counters: &Counters,
-    retained: usize,
-) {
-    snapshot.retained_events = retained;
-    snapshot.network = counters.snapshot();
-    publisher.publish(snapshot.clone());
 }

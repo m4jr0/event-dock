@@ -1,6 +1,8 @@
 //! Backend-neutral access to retained event history.
 
 pub mod compact;
+mod query_scheduler;
+mod snapshot_publisher;
 mod worker;
 pub(crate) use worker::run_storage;
 mod error;
